@@ -1,0 +1,48 @@
+from enum import Enum
+from pydantic import BaseModel, Field
+from typing import Optional, List, Any
+from datetime import datetime
+from app.models.common import MongoBaseModel, PyObjectId
+
+class WorkflowStatus(str, Enum):
+    UPLOADED = "uploaded"
+    EXTRACTING = "extracting"
+    EXTRACTED = "extracted"
+    GENERATED = "generated"
+    DOWNLOADED = "downloaded"
+
+class Inventor(BaseModel):
+    name: str
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    country: Optional[str] = None
+    citizenship: Optional[str] = None
+    extraction_confidence: Optional[float] = None
+
+class PatentApplicationBase(BaseModel):
+    application_number: Optional[str] = None
+    title: Optional[str] = None
+    filing_date: Optional[datetime] = None
+    inventors: List[Inventor] = []
+    workflow_status: WorkflowStatus = WorkflowStatus.UPLOADED
+
+class PatentApplicationCreate(PatentApplicationBase):
+    source_document_ids: List[PyObjectId] = []
+
+class PatentApplicationInDB(MongoBaseModel, PatentApplicationBase):
+    source_document_ids: List[PyObjectId] = []
+    generated_document_ids: List[PyObjectId] = []
+    created_by: PyObjectId
+    updated_by: Optional[PyObjectId] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class PatentApplicationResponse(MongoBaseModel, PatentApplicationBase):
+    source_document_ids: List[str] = []
+    generated_document_ids: List[str] = []
+    created_by: str
+    updated_by: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
