@@ -17,12 +17,27 @@ class StorageService:
                 # Initialize from JSON string in env var
                 credentials_info = json.loads(settings.GOOGLE_APPLICATION_CREDENTIALS_JSON)
                 self.client = storage.Client.from_service_account_info(credentials_info)
+            elif settings.GCP_PROJECT_ID and settings.GCP_CLIENT_EMAIL and settings.GCP_PRIVATE_KEY:
+                # Initialize from individual env vars
+                credentials_info = {
+                    "type": "service_account",
+                    "project_id": settings.GCP_PROJECT_ID,
+                    "private_key_id": "unknown",  # Not strictly required for basic auth
+                    "private_key": settings.GCP_PRIVATE_KEY.replace('\\n', '\n'),
+                    "client_email": settings.GCP_CLIENT_EMAIL,
+                    "client_id": "unknown",
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{settings.GCP_CLIENT_EMAIL}"
+                }
+                self.client = storage.Client.from_service_account_info(credentials_info)
             else:
                 # Initialize from default environment (file path)
                 self.client = storage.Client()
             
-            self.bucket = self.client.bucket(settings.GCS_BUCKET_NAME)
-            logging.info(f"Initialized GCS client for bucket: {settings.GCS_BUCKET_NAME}")
+            self.bucket = self.client.bucket(settings.GCP_BUCKET_NAME)
+            logging.info(f"Initialized GCS client for bucket: {settings.GCP_BUCKET_NAME}")
         except Exception as e:
             logging.error(f"Failed to initialize GCS client: {e}")
             # Don't raise here to allow app startup, but operations will fail

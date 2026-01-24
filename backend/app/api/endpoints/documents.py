@@ -5,6 +5,7 @@ from app.api.deps import get_current_user
 from app.services.storage import storage_service
 from app.models.document import DocumentCreate, DocumentInDB, DocumentType, DocumentResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
 import uuid
 import logging
 
@@ -60,5 +61,21 @@ async def get_download_url(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    # TODO: Implement retrieval logic and permission check
-    pass
+    try:
+        doc = await db.documents.find_one({"_id": ObjectId(document_id)})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Permission check: Ensure current user owns the document
+        # Note: In a real app, you might also allow admins or specific roles
+        if str(doc["user_id"]) != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this document")
+            
+        url = storage_service.generate_presigned_url(doc["storage_key"])
+        return {"url": url}
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logging.error(f"Failed to generate download URL: {e}")
+        raise HTTPException(status_code=500, detail="Could not generate download URL")

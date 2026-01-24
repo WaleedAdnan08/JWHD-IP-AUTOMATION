@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
@@ -25,7 +26,9 @@ export default function DashboardPage() {
             <CardDescription>Create a new Application Data Sheet</CardDescription>
           </CardHeader>
           <CardContent>
-            <Button className="w-full">Start New Application</Button>
+            <Button className="w-full" asChild>
+              <Link href="/dashboard/new-application">Start New Application</Link>
+            </Button>
           </CardContent>
         </Card>
         

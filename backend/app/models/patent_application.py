@@ -12,8 +12,11 @@ class WorkflowStatus(str, Enum):
     DOWNLOADED = "downloaded"
 
 class Inventor(BaseModel):
-    name: str
-    street_address: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    name: Optional[str] = None  # Full name for backward compatibility or display
+    street_address: Optional[str] = None # mailing_address
     city: Optional[str] = None
     state: Optional[str] = None
     zip_code: Optional[str] = None
@@ -21,9 +24,18 @@ class Inventor(BaseModel):
     citizenship: Optional[str] = None
     extraction_confidence: Optional[float] = None
 
+class PatentApplicationMetadata(BaseModel):
+    title: Optional[str] = None
+    application_number: Optional[str] = None
+    filing_date: Optional[str] = None  # Keep as string for extraction, convert later
+    entity_status: Optional[str] = None
+    inventors: List[Inventor] = []
+    extraction_confidence: Optional[float] = None
+
 class PatentApplicationBase(BaseModel):
     application_number: Optional[str] = None
     title: Optional[str] = None
+    entity_status: Optional[str] = None
     filing_date: Optional[datetime] = None
     inventors: List[Inventor] = []
     workflow_status: WorkflowStatus = WorkflowStatus.UPLOADED
