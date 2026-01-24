@@ -1,6 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, status
 from app.models.patent_application import PatentApplicationMetadata, Inventor
-from app.services.extraction import extract_text_from_pdf
 from app.services.llm import llm_service
 from app.services.ads_generator import ADSGenerator
 from app.services.csv_handler import parse_inventors_csv
@@ -33,25 +32,19 @@ async def analyze_application(file: UploadFile = File(...)):
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Extract text
+        # Analyze PDF directly with LLM (Native Vision/Multimodal Support)
         try:
-            text = extract_text_from_pdf(temp_file_path)
-        except Exception as e:
-            logger.error(f"Extraction failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to extract text from PDF: {str(e)}"
-            )
-            
-        # Analyze text with LLM
-        try:
-            metadata = await llm_service.analyze_cover_sheet(text)
+            # We pass the file path directly. The LLM service handles uploading to Gemini.
+            metadata = await llm_service.analyze_cover_sheet(temp_file_path)
             return metadata
+        except HTTPException as he:
+            # Re-raise HTTP exceptions (like 503 from LLM service) directly
+            raise he
         except Exception as e:
             logger.error(f"LLM analysis failed: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to analyze text content: {str(e)}"
+                detail=f"Failed to analyze PDF content: {str(e)}"
             )
             
     finally:

@@ -55,7 +55,26 @@ export const ApplicationWizard = () => {
       setStep('review');
     } catch (err: any) {
       console.error('Processing failed:', err);
-      setError(err.response?.data?.detail || `Failed to process ${isCsv ? 'CSV' : 'document'}. Please try again.`);
+      // Default error message
+      let errorMessage = `Failed to process ${isCsv ? 'CSV' : 'document'}. Please try again.`;
+      
+      // Use detailed error from backend if available
+      if (err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        if (typeof detail === 'string') {
+          errorMessage = detail;
+        } else if (Array.isArray(detail)) {
+          // Handle FastAPI validation errors (array of objects)
+          errorMessage = detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+        } else if (typeof detail === 'object') {
+          errorMessage = JSON.stringify(detail);
+        }
+      } else if (err.message) {
+         // Fallback to axios error message if no response data
+         errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +90,20 @@ export const ApplicationWizard = () => {
       setStep('success');
     } catch (err: any) {
       console.error('Generation failed:', err);
-      setError(err.response?.data?.detail || 'Failed to generate ADS. Please try again.');
+      let errorMessage = 'Failed to generate ADS. Please try again.';
+      
+      if (err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        if (typeof detail === 'string') {
+          errorMessage = detail;
+        } else if (Array.isArray(detail)) {
+          errorMessage = detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+        } else if (typeof detail === 'object') {
+          errorMessage = JSON.stringify(detail);
+        }
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -115,7 +147,7 @@ export const ApplicationWizard = () => {
         <div className="space-y-6">
           <div className="text-center space-y-2">
             <h1 className="text-3xl font-bold tracking-tight">New Application</h1>
-            <p className="text-muted-foreground">Upload a Cover Sheet (PDF) or Inventor List (CSV) to get started.</p>
+            <p className="text-muted-foreground">Upload your Patent Cover Sheet (PDF) or Inventor List (CSV) to get started.</p>
           </div>
           <FileUpload onFileSelect={handleFileUpload} isLoading={isLoading} error={error} />
         </div>

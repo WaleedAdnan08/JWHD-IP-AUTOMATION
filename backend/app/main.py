@@ -1,16 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.core.config import settings
-from app.db.mongodb import connect_to_mongo, close_mongo_connection
-from app.api.api import api_router
 import logging
 
+from app.core.config import settings
+from app.core.logging import setup_logging
+
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+setup_logging(level="INFO")
+from app.db.mongodb import connect_to_mongo, close_mongo_connection
+from app.api.api import api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -5,6 +5,8 @@ from app.models.job import JobStatus, JobType, ProcessingJobInDB, ProcessingJobC
 from bson import ObjectId
 import logging
 
+logger = logging.getLogger(__name__)
+
 class JobService:
     async def create_job(self, user_id: str, job_type: JobType, input_refs: list[str]) -> str:
         db = await get_database()
@@ -16,6 +18,7 @@ class JobService:
         )
         job_db = ProcessingJobInDB(**job_in.model_dump())
         result = await db.processing_jobs.insert_one(job_db.model_dump(by_alias=True))
+        logger.info(f"Created job {result.inserted_id} for user {user_id} with type {job_type}")
         return str(result.inserted_id)
 
     async def update_job_status(self, job_id: str, status: JobStatus, progress: int = 0, error: Optional[str] = None):
@@ -29,11 +32,13 @@ class JobService:
             update_data["completed_at"] = datetime.utcnow()
         if error:
             update_data["error_details"] = error
+            logger.error(f"Job {job_id} failed: {error}")
             
         await db.processing_jobs.update_one(
             {"_id": ObjectId(job_id)},
             {"$set": update_data}
         )
+        logger.info(f"Updated job {job_id} status to {status} (Progress: {progress}%)")
 
     async def get_job(self, job_id: str) -> Optional[ProcessingJobResponse]:
         db = await get_database()

@@ -79,7 +79,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
           <div className="text-center space-y-2">
             <h3 className="text-lg font-semibold">
-              {isLoading ? "Processing Document..." : "Upload Cover Sheet or Inventor List"}
+              {isLoading ? "Processing Document..." : "Upload your Patent Cover Sheet (PDF) or Inventor List (CSV)"}
             </h3>
             <p className="text-sm text-muted-foreground max-w-xs mx-auto">
               {error || "Drag and drop your PDF or CSV here, or click to browse"}

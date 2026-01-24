@@ -5,6 +5,9 @@ from reportlab.lib.styles import getSampleStyleSheet
 from app.models.patent_application import PatentApplicationMetadata, Inventor
 import os
 import sys
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ADSGenerator:
     def generate_ads_pdf(self, data: PatentApplicationMetadata, output_path: str) -> str:
@@ -18,6 +21,7 @@ class ADSGenerator:
         Returns:
             The path to the generated PDF.
         """
+        logger.info(f"Generating ADS PDF at: {output_path}")
         doc = SimpleDocTemplate(output_path, pagesize=letter)
         elements = []
         styles = getSampleStyleSheet()

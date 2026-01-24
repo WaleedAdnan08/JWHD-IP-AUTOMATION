@@ -38,7 +38,17 @@ class Settings(BaseSettings):
     
     # Gemini LLM
     GOOGLE_API_KEY: str
-    GEMINI_MODEL: str = "gemini-3-pro-preview"
+    GEMINI_MODEL: str = "gemini-2.0-flash-exp"
+    GEMINI_TEMPERATURE: float = 0.0
+    GEMINI_MAX_OUTPUT_TOKENS: int = 65536
+    GEMINI_TIMEOUT_SECONDS: int = 900
+    GEMINI_MAX_RETRIES: int = 3
+
+    # Extraction Configuration
+    CHUNK_SIZE_PAGES: int = 50  # Increased to utilize large context window
+    LARGE_FILE_THRESHOLD_MB: float = 20.0  # Increased to avoid unnecessary chunking
+    LARGE_FILE_PAGE_THRESHOLD: int = 50
+    MAX_CONCURRENT_EXTRACTIONS: int = 2  # Reduced to avoid rate limits
 
     class Config:
         env_file = ".env"
