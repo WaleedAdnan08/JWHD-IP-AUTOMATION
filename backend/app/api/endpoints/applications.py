@@ -28,6 +28,8 @@ async def analyze_application(file: UploadFile = File(...)):
     temp_file_path = f"temp_{uuid.uuid4()}.pdf"
     
     try:
+        logger.info(f"Received file for analysis: {file.filename} (Type: {file.content_type})")
+
         # Save uploaded file temporarily
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -36,6 +38,14 @@ async def analyze_application(file: UploadFile = File(...)):
         try:
             # We pass the file path directly. The LLM service handles uploading to Gemini.
             metadata = await llm_service.analyze_cover_sheet(temp_file_path)
+            
+            # Log the result before returning
+            logger.info(f"Analysis complete for {file.filename}")
+            if metadata.inventors:
+                logger.info(f"Found {len(metadata.inventors)} inventors: {[inv.name for inv in metadata.inventors]}")
+            else:
+                logger.warning("No inventors found in the analysis result.")
+                
             return metadata
         except HTTPException as he:
             # Re-raise HTTP exceptions (like 503 from LLM service) directly

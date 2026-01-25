@@ -14,17 +14,23 @@ import io
 import random
 from typing import Dict, Any, Optional, List, Tuple
 from pypdf import PdfReader, PdfWriter
-try:
-    import fitz  # PyMuPDF
-except ImportError:
-    fitz = None
-
 # Configure logging
 logger = logging.getLogger(__name__)
+
+try:
+    import fitz  # PyMuPDF
+    logger.info(f"PyMuPDF (fitz) imported successfully. Version: {fitz.__version__}")
+except ImportError:
+    fitz = None
+    logger.warning("PyMuPDF (fitz) could not be imported. Image-based extraction will be unavailable.")
 
 class LLMService:
     def __init__(self):
         self._initialize_client()
+        if fitz:
+             logger.info("LLMService ready with PyMuPDF support.")
+        else:
+             logger.warning("LLMService running WITHOUT PyMuPDF. Advanced PDF processing disabled.")
 
     def _log_token_usage(self, response: Any, operation: str):
         """
@@ -209,13 +215,38 @@ class LLMService:
 
     async def analyze_cover_sheet(self, file_path: str) -> PatentApplicationMetadata:
         """
-        Analyzes the cover sheet PDF (e.g., ADS 37 CFR 1.76) using a PAGE-BY-PAGE VISION strategy.
-        This maximizes accuracy for multi-page forms with structured blocks.
+        Analyzes the cover sheet PDF.
+        Strategy 1: Check for XFA (Dynamic Form) XML data first.
+        Strategy 2: Fallback to HYBRID PAGE-BY-PAGE strategy (Vision + Text).
         """
-        logger.info(f"--- ANALYZING PDF WITH GEMINI (Page-by-Page Vision): {file_path} ---")
+        logger.info(f"--- ANALYZING PDF WITH GEMINI: {file_path} ---")
 
-        # 1. Convert ALL pages to high-res images
-        logger.info("Converting PDF pages to images for granular analysis...")
+        # STRATEGY 1: Check for XFA Dynamic Form Data
+        try:
+            xfa_data = await self._extract_xfa_data(file_path)
+            if xfa_data:
+                logger.info("XFA Dynamic Form detected! Using direct XML extraction path.")
+                xfa_result = await self._analyze_xfa_xml(xfa_data)
+                
+                # Validation: Only accept XFA result if we actually found inventors
+                if xfa_result.inventors and len(xfa_result.inventors) > 0:
+                     # Check for "ghost" inventors (all nulls) which sometimes happen with empty XFA
+                     valid_inventors = [i for i in xfa_result.inventors if i.name or i.last_name]
+                     if valid_inventors:
+                         logger.info(f"Successfully extracted {len(valid_inventors)} inventors from XFA data.")
+                         xfa_result.inventors = valid_inventors
+                         return xfa_result
+                     else:
+                         logger.warning("XFA extraction returned empty/invalid inventor records. Falling back to Vision strategy.")
+                else:
+                    logger.warning("XFA extraction returned NO inventors. Falling back to Vision strategy.")
+                    
+        except Exception as e:
+            logger.warning(f"XFA detection failed (continuing to vision fallback): {e}")
+
+        # STRATEGY 2: Hybrid Vision + Text (Page-by-Page)
+        logger.info("Using Hybrid Vision+Text strategy...")
+        
         image_paths = await self._convert_pdf_to_images(file_path)
         
         if not image_paths:
@@ -232,12 +263,23 @@ class LLMService:
         }
 
         try:
+            # Open doc once for text extraction
+            doc = fitz.open(file_path) if fitz else None
+
             # 2. Iterate through each page image
             for page_idx, img_path in enumerate(image_paths):
                 logger.info(f"Processing Page {page_idx + 1} of {len(image_paths)}...")
                 
-                # Analyze single page
-                page_result = await self._analyze_single_page_image(img_path, page_idx + 1)
+                # Extract text for this page
+                page_text = ""
+                if doc and page_idx < len(doc):
+                    try:
+                        page_text = doc[page_idx].get_text()
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text for page {page_idx}: {e}")
+
+                # Analyze single page with HYBRID input
+                page_result = await self._analyze_single_page_image(img_path, page_idx + 1, page_text)
                 
                 # Aggregate Metadata (Prioritize Page 1 for Title/App Number, but update if found later and currently empty)
                 if not final_metadata["title"] and page_result.get("title"):
@@ -259,6 +301,37 @@ class LLMService:
             
             final_metadata["inventors"] = extracted_inventors
             logger.info(f"Page-by-Page Extraction Complete. Found {len(extracted_inventors)} inventors.")
+            
+            # STRATEGY 3: Final Fallback - Native PDF Direct Upload
+            # Check if we found any VALID inventors (names that are not empty)
+            valid_inventors_found = False
+            if extracted_inventors:
+                for inv in extracted_inventors:
+                    if (inv.get("name") and inv["name"].strip()) or (inv.get("last_name") and inv["last_name"].strip()):
+                        valid_inventors_found = True
+                        break
+            
+            if not valid_inventors_found:
+                logger.warning("⚠️ No VALID inventors found via Page-by-Page. Attempting Strategy 3: Local Form Field Extraction...")
+                
+                # STRATEGY 3: Local Form Field Extraction (pypdf)
+                # This bypasses rendering issues (like "Please upgrade Adobe Reader" pages) by reading form keys directly
+                form_data_text = await self._extract_text_locally(file_path)
+                if "--- FORM FIELD DATA ---" in form_data_text:
+                    logger.info("Found Form Field Data! Analyzing with LLM...")
+                    form_result = await self._analyze_form_text(form_data_text)
+                    
+                    # Validate Form Result
+                    if form_result.inventors and len(form_result.inventors) > 0:
+                        valid_form_invs = [i for i in form_result.inventors if i.name or i.last_name]
+                        if valid_form_invs:
+                            logger.info(f"Successfully extracted {len(valid_form_invs)} inventors from Form Data.")
+                            form_result.inventors = valid_form_invs
+                            return form_result
+
+                # STRATEGY 4: Final Fallback - Native PDF Direct Upload
+                logger.warning("⚠️ Form Field Extraction failed or found no data. Attempting Final Fallback: Direct PDF Upload...")
+                return await self._analyze_pdf_direct_fallback(file_path)
 
             # Post-processing: Name splitting
             for inventor in final_metadata["inventors"]:
@@ -278,31 +351,220 @@ class LLMService:
             logger.error(f"Page-by-Page analysis failed: {e}")
             raise e
         finally:
+             if doc:
+                 doc.close()
              # Cleanup images
              for path in image_paths:
                  if os.path.exists(path):
                      os.remove(path)
 
-    async def _analyze_single_page_image(self, img_path: str, page_num: int) -> Dict[str, Any]:
+    async def _extract_xfa_data(self, file_path: str) -> Optional[str]:
         """
-        Analyzes a single page image to extract partial metadata.
+        Checks if the PDF is an XFA form and extracts the internal XML data.
+        """
+        def _read_xfa():
+            try:
+                reader = PdfReader(file_path)
+                if "/AcroForm" in reader.trailer["/Root"]:
+                    acroform = reader.trailer["/Root"]["/AcroForm"]
+                    if "/XFA" in acroform:
+                        # XFA content can be a list or a stream
+                        xfa = acroform["/XFA"]
+                        # Often it's a list of [key, indirect_object, key, indirect_object...]
+                        # We want to find the 'datasets' packet usually
+                        
+                        # Targeted Extraction: Prioritize 'datasets' which contains user data
+                        xml_content = []
+                        
+                        if isinstance(xfa, list):
+                            # XFA is a list of keys and values: [key1, val1, key2, val2...]
+                            # We want to grab everything, but prioritize 'datasets'
+                            for i in range(0, len(xfa), 2):
+                                key = xfa[i]
+                                obj = xfa[i+1]
+                                
+                                # We specifically want the 'datasets' packet as it contains the actual USER DATA.
+                                # IMPORTANT: 'template' contains the empty form structure (400KB+) which confuses the LLM.
+                                # We ONLY want 'datasets' to give the LLM pure data.
+                                if key == 'datasets':
+                                    try:
+                                        data = obj.get_object().get_data()
+                                        if data:
+                                            decoded_data = data.decode('utf-8', errors='ignore')
+                                            xml_content.append(f"<!-- {key} START -->")
+                                            xml_content.append(decoded_data)
+                                            xml_content.append(f"<!-- {key} END -->")
+                                    except Exception as e:
+                                        logger.warning(f"Failed to read XFA packet {key}: {e}")
+                                        
+                        else:
+                            # Single stream fallback
+                            try:
+                                xml_content.append(xfa.get_object().get_data().decode('utf-8', errors='ignore'))
+                            except:
+                                pass
+                        
+                        full_xml = "\n".join(xml_content)
+                        if len(full_xml) > 100:
+                            logger.info(f"Successfully extracted XFA XML (Length: {len(full_xml)} bytes)")
+                            return full_xml
+                return None
+            except Exception as e:
+                logger.warning(f"Error reading XFA data: {e}")
+                return None
+
+        return await asyncio.to_thread(_read_xfa)
+
+    async def _analyze_form_text(self, form_text: str) -> PatentApplicationMetadata:
+        """
+        Analyzes raw form field text extracted by pypdf.
+        """
+        prompt = f"""
+        Analyze the provided PDF Form Data (Key-Value pairs) from a Patent Application.
+        Extract the patent metadata by inferring the meaning of the field keys and values.
+        
+        ## FORM DATA
+        {form_text[:50000]}
+        
+        ## INSTRUCTIONS
+        - The data is presented as 'Field_Name: Value'.
+        - Look for keys like 'Title', 'InventionTitle', 'ApplicationNo', 'AppNum', etc.
+        - **Inventors**: Look for repeating fields like 'GivenName_1', 'FamilyName_1', 'Address_1' etc.
+        - Reconstruct the inventor objects from these flattened keys.
+        
+        ## OUTPUT SCHEMA
+        Return JSON with:
+        - _debug_reasoning (string)
+        - title
+        - application_number
+        - entity_status
+        - inventors (list of objects)
+        """
+        
+        schema = {
+            "_debug_reasoning": "Explain which keys were mapped to which fields",
+            "title": "Title found (or null)",
+            "application_number": "Application number (or null)",
+            "entity_status": "Entity status (or null)",
+            "inventors": [
+                {
+                    "name": "Full Name",
+                    "first_name": "First name",
+                    "middle_name": "Middle name",
+                    "last_name": "Last name",
+                    "city": "City",
+                    "state": "State",
+                    "country": "Country",
+                    "street_address": "Street address",
+                    "full_address": "Full address string"
+                }
+            ]
+        }
+        
+        result = await self.generate_structured_content(prompt=prompt, schema=schema)
+        
+        # Post-processing
+        if result.get("inventors"):
+            for inventor in result["inventors"]:
+                if inventor.get("name") and not inventor.get("last_name"):
+                    parts = inventor["name"].split()
+                    if len(parts) >= 2:
+                        inventor["first_name"] = parts[0]
+                        inventor["last_name"] = parts[-1]
+        
+        return PatentApplicationMetadata(**result)
+
+    async def _analyze_xfa_xml(self, xfa_xml: str) -> PatentApplicationMetadata:
+        """
+        Analyzes the raw XFA XML data to extract metadata.
+        """
+        # Truncate XML if it's massive to avoid context limits (though rare for ADS)
+        truncated_xml = xfa_xml[:50000]
+        
+        prompt = f"""
+        Analyze the provided XFA Form XML Data from a Patent Application Data Sheet (ADS).
+        Extract the patent metadata directly from the XML structure.
+        
+        ## XML DATA
+        {truncated_xml}
+        
+        ## INSTRUCTIONS
+        - The data is structured in XML tags. Look for:
+          - Title of Invention
+          - Application Number / Control Number
+          - Inventor Information (Names, Cities, States, Addresses)
+        - **Inventors**: Extract ALL inventors found in the XML datasets.
+        
+        ## OUTPUT SCHEMA
+        Return JSON with:
+        - _debug_reasoning (string)
+        - title
+        - application_number
+        - entity_status
+        - inventors (list of objects)
+        """
+        
+        schema = {
+            "_debug_reasoning": "Explain where in the XML the data was found",
+            "title": "Title found (or null)",
+            "application_number": "Application number (or null)",
+            "entity_status": "Entity status (or null)",
+            "inventors": [
+                {
+                    "name": "Full Name",
+                    "first_name": "First name",
+                    "middle_name": "Middle name",
+                    "last_name": "Last name",
+                    "city": "City",
+                    "state": "State",
+                    "country": "Country",
+                    "street_address": "Street address",
+                    "full_address": "Full address string"
+                }
+            ]
+        }
+        
+        result = await self.generate_structured_content(prompt=prompt, schema=schema)
+        
+        # Post-processing same as before
+        if result.get("inventors"):
+            for inventor in result["inventors"]:
+                if inventor.get("name") and not inventor.get("last_name"):
+                    parts = inventor["name"].split()
+                    if len(parts) >= 2:
+                        inventor["first_name"] = parts[0]
+                        inventor["last_name"] = parts[-1]
+        
+        return PatentApplicationMetadata(**result)
+
+    async def _analyze_single_page_image(self, img_path: str, page_num: int, page_text: str = "") -> Dict[str, Any]:
+        """
+        Analyzes a single page image AND its text content to extract partial metadata.
         """
         try:
             file_obj = await self.upload_file(img_path, mime_type="image/jpeg")
             
             prompt = f"""
             Analyze this specific page (Page {page_num}) of a Patent Application Data Sheet (ADS).
+            I am providing BOTH the visual image AND the raw text content for this page.
+            
+            ## RAW TEXT CONTENT
+            {page_text[:10000]} # Limit text to avoid context overflow if huge
             
             ## INSTRUCTIONS
-            1. **Check for Inventors**: Does this page contain an "Inventor Information" block?
-               - If YES, extract ALL inventors visible on THIS PAGE ONLY.
-               - Pay attention to the TABLE structure (rows/columns).
-               - Extract Name, City, State, Country, Address.
-            2. **Check for Header Info**: Does this page contain Title, Application Number, or Entity Status?
-               - Typically only on Page 1, but check anyway.
-            
+            1. **Visual Reasoning**: First, explain what you see on the page in the '_debug_reasoning' field.
+               - Do you see an "Inventor Information" header?
+               - Do you see a table structure?
+               - Does the raw text contain names that might be illegible in the image?
+            2. **Inventors Extraction**:
+               - **COMBINE SOURCES**: Use the Image to understand the layout (rows/columns) and the Text to get accurate spelling.
+               - **SEARCH AGGRESSIVELY**: Look for *any* blocks that contain names and addresses.
+               - **Address**: If you can't separate City/State, just put the whole address in 'full_address' or 'street_address'.
+            3. **Header Info**: Look for Title, Application Number, Entity Status.
+
             ## OUTPUT SCHEMA
             Return JSON with:
+            - _debug_reasoning (string): Description of page content and logic used.
             - title (string/null)
             - application_number (string/null)
             - entity_status (string/null)
@@ -310,6 +572,7 @@ class LLMService:
             """
             
             schema = {
+                "_debug_reasoning": "Explain what sections were found on this page (e.g., 'Found Inventor Info table with 2 rows')",
                 "title": "Title found on this page (or null)",
                 "application_number": "Application number found on this page (or null)",
                 "entity_status": "Entity status found on this page (or null)",
@@ -322,7 +585,8 @@ class LLMService:
                         "city": "City",
                         "state": "State",
                         "country": "Country",
-                        "street_address": "Street address / Mailing address"
+                        "street_address": "Street address / Mailing address",
+                        "full_address": "Full address string (fallback)"
                     }
                 ]
             }
@@ -332,6 +596,11 @@ class LLMService:
                 file_obj=file_obj,
                 schema=schema
             )
+            
+            # Log the reasoning for debugging purposes
+            if result.get("_debug_reasoning"):
+                logger.info(f"Page {page_num} Analysis: {result.get('_debug_reasoning')}")
+            
             return result
             
         except Exception as e:
