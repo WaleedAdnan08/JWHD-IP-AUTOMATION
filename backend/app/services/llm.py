@@ -14,6 +14,10 @@ import io
 import random
 from typing import Dict, Any, Optional, List, Tuple
 from pypdf import PdfReader, PdfWriter
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    fitz = None
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -40,12 +44,14 @@ class LLMService:
                 
                 logger.info(
                     f"Token Usage [{operation}]: Input={prompt_tokens}, Output={candidates_tokens}, Total={total_tokens}",
-                    extra_data={
-                        "token_usage": {
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": candidates_tokens,
-                            "total_tokens": total_tokens,
-                            "estimated_cost_usd": round(total_cost, 6)
+                    extra={
+                        "extra_data": {
+                            "token_usage": {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": candidates_tokens,
+                                "total_tokens": total_tokens,
+                                "estimated_cost_usd": round(total_cost, 6)
+                            }
                         }
                     }
                 )
@@ -161,11 +167,14 @@ class LLMService:
                                 response_text = response.candidates[0].content.parts[0].text
                              else:
                                 raise ValueError("Could not extract text from response")
-
+        
+                        # DEBUG: Log the first 500 chars of raw LLM output to see what it generated
+                        logger.info(f"RAW LLM RESPONSE (First 500 chars): {response_text[:500]}")
+        
                     except Exception as e:
                         logger.error(f"Failed to access response text: {e}", exc_info=True)
                         raise e
-
+        
                     # Parse JSON
                     try:
                         return json.loads(response_text)
@@ -200,30 +209,176 @@ class LLMService:
 
     async def analyze_cover_sheet(self, file_path: str) -> PatentApplicationMetadata:
         """
-        Analyzes the cover sheet PDF to extract patent application metadata using Gemini Native PDF support.
-        This uses the DocuMind extraction pipeline.
+        Analyzes the cover sheet PDF (e.g., ADS 37 CFR 1.76) using a PAGE-BY-PAGE VISION strategy.
+        This maximizes accuracy for multi-page forms with structured blocks.
         """
-        logger.info(f"--- ANALYZING PDF WITH GEMINI: {file_path} ---")
+        logger.info(f"--- ANALYZING PDF WITH GEMINI (Page-by-Page Vision): {file_path} ---")
 
-        # 1. First, extract the raw text and metadata using the robust extraction pipeline
-        extraction_result = await self.extract_document(file_path)
+        # 1. Convert ALL pages to high-res images
+        logger.info("Converting PDF pages to images for granular analysis...")
+        image_paths = await self._convert_pdf_to_images(file_path)
         
-        # 2. Use the extracted text to parse structured data
-        # We use the text extracted by Gemini (which is high fidelity) to fill the schema
+        if not image_paths:
+            logger.warning("PDF-to-Image conversion failed or returned empty. Falling back to direct PDF upload.")
+            return await self._analyze_pdf_direct_fallback(file_path)
+
+        extracted_inventors = []
+        final_metadata = {
+            "title": None,
+            "application_number": None,
+            "filing_date": None,
+            "entity_status": None,
+            "inventors": []
+        }
+
+        try:
+            # 2. Iterate through each page image
+            for page_idx, img_path in enumerate(image_paths):
+                logger.info(f"Processing Page {page_idx + 1} of {len(image_paths)}...")
+                
+                # Analyze single page
+                page_result = await self._analyze_single_page_image(img_path, page_idx + 1)
+                
+                # Aggregate Metadata (Prioritize Page 1 for Title/App Number, but update if found later and currently empty)
+                if not final_metadata["title"] and page_result.get("title"):
+                    final_metadata["title"] = page_result["title"]
+                if not final_metadata["application_number"] and page_result.get("application_number"):
+                    final_metadata["application_number"] = page_result["application_number"]
+                if not final_metadata["entity_status"] and page_result.get("entity_status"):
+                    final_metadata["entity_status"] = page_result["entity_status"]
+                
+                # Aggregate Inventors (Append unique ones)
+                if page_result.get("inventors"):
+                    for new_inv in page_result["inventors"]:
+                        # Simple de-duplication based on name (if provided)
+                        if new_inv.get("name") and not any(existing.get("name") == new_inv.get("name") for existing in extracted_inventors):
+                            extracted_inventors.append(new_inv)
+                        # If no name but has details, append anyway (rare edge case)
+                        elif not new_inv.get("name") and (new_inv.get("first_name") or new_inv.get("last_name")):
+                             extracted_inventors.append(new_inv)
+            
+            final_metadata["inventors"] = extracted_inventors
+            logger.info(f"Page-by-Page Extraction Complete. Found {len(extracted_inventors)} inventors.")
+
+            # Post-processing: Name splitting
+            for inventor in final_metadata["inventors"]:
+                if inventor.get("name") and not inventor.get("last_name"):
+                    parts = inventor["name"].split()
+                    if len(parts) >= 2:
+                        inventor["first_name"] = parts[0]
+                        inventor["last_name"] = parts[-1]
+                        if len(parts) > 2:
+                            inventor["middle_name"] = " ".join(parts[1:-1])
+                    elif len(parts) == 1:
+                        inventor["first_name"] = parts[0]
+
+            return PatentApplicationMetadata(**final_metadata)
+
+        except Exception as e:
+            logger.error(f"Page-by-Page analysis failed: {e}")
+            raise e
+        finally:
+             # Cleanup images
+             for path in image_paths:
+                 if os.path.exists(path):
+                     os.remove(path)
+
+    async def _analyze_single_page_image(self, img_path: str, page_num: int) -> Dict[str, Any]:
+        """
+        Analyzes a single page image to extract partial metadata.
+        """
+        try:
+            file_obj = await self.upload_file(img_path, mime_type="image/jpeg")
+            
+            prompt = f"""
+            Analyze this specific page (Page {page_num}) of a Patent Application Data Sheet (ADS).
+            
+            ## INSTRUCTIONS
+            1. **Check for Inventors**: Does this page contain an "Inventor Information" block?
+               - If YES, extract ALL inventors visible on THIS PAGE ONLY.
+               - Pay attention to the TABLE structure (rows/columns).
+               - Extract Name, City, State, Country, Address.
+            2. **Check for Header Info**: Does this page contain Title, Application Number, or Entity Status?
+               - Typically only on Page 1, but check anyway.
+            
+            ## OUTPUT SCHEMA
+            Return JSON with:
+            - title (string/null)
+            - application_number (string/null)
+            - entity_status (string/null)
+            - inventors (list of objects)
+            """
+            
+            schema = {
+                "title": "Title found on this page (or null)",
+                "application_number": "Application number found on this page (or null)",
+                "entity_status": "Entity status found on this page (or null)",
+                "inventors": [
+                    {
+                        "name": "Full Name",
+                        "first_name": "First name",
+                        "middle_name": "Middle name",
+                        "last_name": "Last name",
+                        "city": "City",
+                        "state": "State",
+                        "country": "Country",
+                        "street_address": "Street address / Mailing address"
+                    }
+                ]
+            }
+
+            result = await self.generate_structured_content(
+                prompt=prompt,
+                file_obj=file_obj,
+                schema=schema
+            )
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to analyze page {page_num}: {e}")
+            return {}
+
+    async def _analyze_pdf_direct_fallback(self, file_path: str) -> PatentApplicationMetadata:
+        """
+        Original single-pass logic preserved as fallback.
+        """
+        # Upload file to Gemini once
+        try:
+            file_obj = await self.upload_file(file_path)
+        except Exception as e:
+            logger.error(f"Failed to upload file for analysis: {e}")
+            raise e
+
+        # Construct prompt for direct visual extraction
         prompt = """
-        Analyze the provided Patent Application Cover Sheet text and extract the metadata specified below.
-        
-        Instructions:
-        - Extract the Title of Invention.
-        - Extract Application Number, Filing Date, and Entity Status if they appear in the text.
-        - Extract all Inventors listed.
-        - For each inventor, extract: First Name, Middle Name, Last Name, City, State, Country, Citizenship, and Mailing Address.
-        
-        Important Guidelines:
-        - If an exact field is missing, try to infer it from context if possible (e.g., infer Country from City/State if not explicitly stated).
-        - Look for labels like "Inventor:", "Applicant:", "Title:", "Residence:", "Address:", "Citizenship:".
-        - If a field is definitely not present, return null.
-        - The output must be valid JSON matching the provided schema.
+        Analyze the provided document, which is likely a **Patent Application Data Sheet (ADS)** or similar cover sheet.
+        Your goal is to extract specific bibliographic data with HIGH PRECISION.
+
+        ## DOCUMENT STRUCTURE AWARENESS
+        - **ADS Forms (PTO/AIA/14)**: These forms use structured tables.
+          - **Inventors**: Look for the "Inventor Information" section. This is often a TABLE where each row is an inventor, or a set of blocks.
+          - **Multi-Page**: The inventor list often SPANS MULTIPLE PAGES. You MUST look at ALL pages to find every inventor.
+          - **Columns**: In ADS tables, names are often split into "Given Name", "Middle Name", "Family Name".
+          - **Addresses**: Addresses are often in separate rows or blocks below the name.
+
+        ## EXTRACTION INSTRUCTIONS
+        1. **Title**: Extract the "Title of Invention".
+        2. **Application Number**: Extract if present (e.g., "Application Number", "Control Number").
+        3. **Filing Date**: Extract if present.
+        4. **Entity Status**: Extract if checked (e.g., "Small Entity", "Micro Entity").
+        5. **Inventors (CRITICAL)**:
+           - Extract **ALL** inventors found in the document.
+           - Check **EVERY PAGE** for additional inventors.
+           - If the document is an ADS, strictly follow the "Inventor Information" table/blocks.
+           - Combine "Given Name", "Middle Name", "Family Name" into a single "name" field if needed, or populate separate fields if the schema allows.
+           - **Address**: Extract the complete mailing address (City, State, Country, Street/Postal).
+
+        ## DATA CLEANING RULES
+        - Remove legal boilerplate (e.g., "The application data sheet is part of...").
+        - If a field is empty in the form (e.g., Application Number is blank), return null.
+        - Do NOT Hallucinate. Only extract what is visually present.
+
+        The output must be valid JSON matching the provided schema.
         """
         
         schema = {
@@ -233,9 +388,10 @@ class LLMService:
             "entity_status": "Entity status",
             "inventors": [
                 {
-                    "first_name": "First name",
-                    "middle_name": "Middle name",
-                    "last_name": "Last name",
+                    "name": "Full Name (e.g. John A. Doe)",
+                    "first_name": "First name (optional)",
+                    "middle_name": "Middle name (optional)",
+                    "last_name": "Last name (optional)",
                     "city": "City",
                     "state": "State",
                     "country": "Country",
@@ -245,30 +401,123 @@ class LLMService:
             ]
         }
         
-        full_input = f"{prompt}\n\nTEXT CONTENT:\n{extraction_result.extracted_text[:50000]}" # Use extracted text
-        
         try:
+            # Pass the file object DIRECTLY to the LLM along with the prompt
             result = await self.generate_structured_content(
-                prompt=full_input,
+                prompt=prompt,
+                file_obj=file_obj,  # <--- Key change: Passing the file object
                 schema=schema
             )
             
             # Validate that we actually got meaningful data
             if not result:
                 raise ValueError("LLM returned empty response")
-                
-            has_inventors = result.get("inventors") and len(result.get("inventors")) > 0
-            has_title = result.get("title") and str(result.get("title")).strip()
             
-            if not has_inventors and not has_title:
-                logger.error(f"Extraction validation failed. Input text length: {len(extraction_result.extracted_text)}")
-                logger.error(f"LLM Result: {json.dumps(result)}")
-                raise ValueError("LLM failed to extract any inventors or title from the document")
-            
+            # Post-processing: If only 'name' is present, try to split it into first/last
+            # This handles the relaxed schema allowing single 'name' field
+            if result.get("inventors"):
+                for inventor in result["inventors"]:
+                    if inventor.get("name") and not inventor.get("last_name"):
+                        parts = inventor["name"].split()
+                        if len(parts) >= 2:
+                            inventor["first_name"] = parts[0]
+                            inventor["last_name"] = parts[-1]
+                            if len(parts) > 2:
+                                inventor["middle_name"] = " ".join(parts[1:-1])
+                        elif len(parts) == 1:
+                            inventor["first_name"] = parts[0]
+
             return PatentApplicationMetadata(**result)
+            
         except Exception as e:
             logger.error(f"Error analyzing cover sheet: {e}")
             raise e
+
+    async def _convert_pdf_to_images(self, file_path: str) -> List[str]:
+        """
+        Converts PDF pages to JPEG images using PyMuPDF (fitz).
+        Returns a list of temporary file paths.
+        """
+        if fitz is None:
+            logger.error("PyMuPDF (fitz) is not installed. Image conversion fallback unavailable.")
+            return []
+
+        def _convert():
+            image_paths = []
+            try:
+                doc = fitz.open(file_path)
+                # Process up to first 5 pages to avoid overload
+                for i in range(min(5, len(doc))):
+                    page = doc.load_page(i)
+                    # Increase DPI to 300 for high-quality OCR on bad scans
+                    pix = page.get_pixmap(dpi=300)
+                    img_path = f"{file_path}_page_{i}.jpg"
+                    pix.save(img_path)
+                    image_paths.append(img_path)
+                doc.close()
+            except Exception as e:
+                logger.error(f"PDF to Image conversion failed: {e}")
+            return image_paths
+
+        return await asyncio.to_thread(_convert)
+
+    async def _extract_text_locally(self, file_path: str) -> str:
+        """
+        Extracts text from a PDF using pypdf locally.
+        Crucially, this extracts FORM FIELDS from editable PDFs.
+        """
+        def _read_pdf():
+            text_content = []
+            try:
+                reader = PdfReader(file_path)
+                
+                # --- DIAGNOSTICS ---
+                if reader.is_encrypted:
+                    logger.warning(f"PDF is encrypted. Attempting to read anyway (might fail if password needed).")
+                    try:
+                        reader.decrypt("")
+                    except:
+                        pass
+                
+                # Check for XFA (Dynamic Forms)
+                if "/AcroForm" in reader.trailer["/Root"] and "/XFA" in reader.trailer["/Root"]["/AcroForm"]:
+                     logger.warning("PDF appears to contain XFA (Dynamic Form) data. Standard extraction might be limited.")
+                     text_content.append("[WARNING: Document is an XFA Dynamic Form. Data might be hidden.]")
+                # -------------------
+
+                # 1. Extract Form Fields (Key for Editable PDFs)
+                try:
+                    fields = reader.get_form_text_fields()
+                    if fields:
+                        text_content.append("--- FORM FIELD DATA ---")
+                        for key, value in fields.items():
+                            if value:
+                                text_content.append(f"{key}: {value}")
+                        text_content.append("--- END FORM DATA ---\n")
+                    else:
+                        logger.info("No standard AcroForm fields found.")
+                except Exception as e:
+                    logger.warning(f"Failed to extract form fields: {e}")
+
+                # 2. Extract Page Text
+                for i, page in enumerate(reader.pages):
+                    text_content.append(f"--- PAGE {i+1} ---")
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_content.append(page_text)
+                        else:
+                            text_content.append("[EMPTY PAGE TEXT - LIKELY IMAGE OR XFA]")
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from page {i+1}: {e}")
+                        
+            except Exception as e:
+                logger.error(f"Local PDF reading failed: {e}")
+                return ""
+                
+            return "\n".join(text_content)
+
+        return await asyncio.to_thread(_read_pdf)
 
     # --- DocuMind Extraction Pipeline Methods ---
 
