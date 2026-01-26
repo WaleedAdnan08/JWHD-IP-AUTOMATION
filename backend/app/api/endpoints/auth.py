@@ -6,6 +6,7 @@ from app.core import security
 from app.core.config import settings
 from app.db.mongodb import get_database
 from app.models.user import UserCreate, UserResponse, UserInDB
+from app.services.audit import audit_service
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 
@@ -26,6 +27,13 @@ async def login_access_token(
     """
     user = await db.users.find_one({"email": form_data.username})
     if not user or not security.verify_password(form_data.password, user["hashed_password"]):
+        # Log failure (if user exists, use ID, else None/System)
+        user_id = str(user["_id"]) if user else "unauthenticated"
+        await audit_service.log_event(
+            user_id=user_id,
+            event_type="login_failure",
+            details={"email": form_data.username}
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -33,10 +41,26 @@ async def login_access_token(
         )
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    # Token Claims
+    token_data = {
+        "sub": str(user["_id"]),
+        "email": user["email"],
+        "name": user["full_name"],
+        "role": user["role"],
+        "firm": user.get("firm_affiliation")
+    }
+    
     access_token = security.create_access_token(
-        data={"sub": str(user["_id"])}, expires_delta=access_token_expires
+        data=token_data, expires_delta=access_token_expires
     )
     
+    await audit_service.log_event(
+        user_id=str(user["_id"]),
+        event_type="login_success",
+        details={"email": user["email"]}
+    )
+
     return {
         "access_token": access_token,
         "token_type": "bearer",

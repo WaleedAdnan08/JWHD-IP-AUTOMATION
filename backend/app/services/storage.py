@@ -82,4 +82,16 @@ class StorageService:
         except Exception as e:
             logging.warning(f"Failed to delete blob {blob_name} (might not exist): {e}")
 
+    def download_to_filename(self, blob_name: str, filename: str):
+        """
+        Downloads a blob to a local file.
+        """
+        try:
+            blob = self.bucket.blob(blob_name)
+            blob.download_to_filename(filename)
+            logging.info(f"Downloaded blob {blob_name} to {filename}")
+        except Exception as e:
+            logging.error(f"Failed to download blob {blob_name}: {e}")
+            raise e
+
 storage_service = StorageService()

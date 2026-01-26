@@ -34,7 +34,7 @@ def parse_inventors_csv(file_content: bytes) -> List[Inventor]:
     reader = csv.DictReader(file_obj)
     
     if not reader.fieldnames:
-        return []
+        raise ValueError("CSV file is empty or missing headers")
 
     # Map likely CSV headers to Inventor model fields
     # Keys are Inventor model field names
@@ -81,6 +81,12 @@ def parse_inventors_csv(file_content: bytes) -> List[Inventor]:
             # For now, we trust the model validation
             inventor = Inventor(**inventor_data)
             inventors.append(inventor)
+            
+    if len(inventors) == 0:
+        raise ValueError("No valid inventor rows found in CSV")
+        
+    if len(inventors) > 20:
+        raise ValueError(f"Too many inventors found ({len(inventors)}). Maximum limit is 20.")
             
     return inventors
 

@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
 from contextlib import asynccontextmanager
 import logging
 
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.errors import http_exception_handler, validation_exception_handler
 
 # Configure logging
 setup_logging(level="INFO")
@@ -22,6 +25,10 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     lifespan=lifespan
 )
+
+# Register Exception Handlers
+app.add_exception_handler(HTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 # Set all CORS enabled origins
 if settings.BACKEND_CORS_ORIGINS:

@@ -1,13 +1,18 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, status
-from app.models.patent_application import PatentApplicationMetadata, Inventor
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
+from app.models.patent_application import PatentApplicationMetadata, Inventor, PatentApplicationCreate, PatentApplicationResponse, PatentApplicationInDB
 from app.services.llm import llm_service
 from app.services.ads_generator import ADSGenerator
 from app.services.csv_handler import parse_inventors_csv
 from app.services.storage import storage_service
+from app.models.user import UserResponse
+from app.api.deps import get_current_user
+from app.db.mongodb import get_database
+from motor.motor_asyncio import AsyncIOMotorDatabase
 import os
 import shutil
 import uuid
 import logging
+import bson
 from typing import Dict, Any, List
 
 router = APIRouter()
@@ -83,6 +88,51 @@ async def parse_csv(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to parse CSV: {str(e)}"
+        )
+
+@router.post("/", response_model=PatentApplicationResponse, status_code=status.HTTP_201_CREATED)
+async def create_application(
+    application_in: PatentApplicationCreate,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Create a new patent application record.
+    Validates that the record size does not exceed MongoDB 16MB limit.
+    """
+    # Create DB model
+    app_db = PatentApplicationInDB(
+        **application_in.model_dump(),
+        created_by=current_user.id
+    )
+    
+    # Calculate BSON size
+    doc = app_db.model_dump(by_alias=True)
+    try:
+        bson_size = len(bson.BSON.encode(doc))
+        if bson_size > 16 * 1024 * 1024: # 16MB
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Application record size ({bson_size} bytes) exceeds the 16MB limit."
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        logger.error(f"BSON encoding failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to validate application record size"
+        )
+
+    try:
+        new_app = await db.patent_applications.insert_one(doc)
+        created_app = await db.patent_applications.find_one({"_id": new_app.inserted_id})
+        return PatentApplicationResponse(**created_app)
+    except Exception as e:
+        logger.error(f"Failed to create application: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create application"
         )
 
 @router.post("/generate-ads")

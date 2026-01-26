@@ -2,8 +2,11 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from app.db.mongodb import get_database
 from app.models.job import JobStatus, JobType, ProcessingJobInDB, ProcessingJobCreate, ProcessingJobResponse
+from app.models.document import ProcessedStatus
 from bson import ObjectId
 import logging
+import os
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -46,5 +49,86 @@ class JobService:
         if job:
             return ProcessingJobResponse(**job)
         return None
+
+    async def process_document_extraction(self, job_id: str, document_id: str, storage_key: str):
+        """
+        Background task to process document extraction.
+        """
+        # Delayed imports to avoid circular dependencies
+        from app.services.storage import storage_service
+        from app.services.llm import llm_service
+        from app.services.audit import audit_service
+        
+        logger.info(f"Starting extraction for Job {job_id} (Doc: {document_id})")
+        db = await get_database()
+        
+        # Get user_id for logging (could be passed in, or fetched from job)
+        job = await db.processing_jobs.find_one({"_id": ObjectId(job_id)})
+        user_id = str(job["user_id"]) if job else "system"
+        
+        temp_file_path = f"temp_{uuid.uuid4()}.pdf"
+        
+        try:
+            # 1. Update Job Status to PROCESSING
+            await self.update_job_status(job_id, JobStatus.PROCESSING, progress=10)
+            await db.documents.update_one(
+                {"_id": ObjectId(document_id)},
+                {"$set": {"processed_status": ProcessedStatus.PROCESSING}}
+            )
+            
+            # 2. Download file from Storage
+            logger.info(f"Downloading file {storage_key} to {temp_file_path}")
+            storage_service.download_to_filename(storage_key, temp_file_path)
+            await self.update_job_status(job_id, JobStatus.PROCESSING, progress=30)
+            
+            # 3. Perform Extraction
+            logger.info("Calling LLM Service...")
+            start_time = datetime.utcnow()
+            metadata = await llm_service.analyze_cover_sheet(temp_file_path)
+            end_time = datetime.utcnow()
+            duration_ms = (end_time - start_time).total_seconds() * 1000
+            
+            # Log LLM Usage
+            await audit_service.log_event(
+                user_id=user_id,
+                event_type="llm_extraction",
+                details={
+                    "job_id": job_id,
+                    "document_id": document_id,
+                    "duration_ms": duration_ms,
+                    "model": "gemini-2.0-flash-exp" # Or fetch from settings
+                }
+            )
+
+            await self.update_job_status(job_id, JobStatus.PROCESSING, progress=90)
+            
+            # 4. Save Results
+            # Store full extraction data in the document
+            logger.info("Saving extraction results...")
+            await db.documents.update_one(
+                {"_id": ObjectId(document_id)},
+                {
+                    "$set": {
+                        "processed_status": ProcessedStatus.COMPLETED,
+                        "extraction_data": metadata.model_dump(by_alias=True)
+                    }
+                }
+            )
+            
+            # 5. Complete Job
+            await self.update_job_status(job_id, JobStatus.COMPLETED, progress=100)
+            logger.info(f"Job {job_id} completed successfully.")
+            
+        except Exception as e:
+            logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+            await self.update_job_status(job_id, JobStatus.FAILED, error=str(e))
+            await db.documents.update_one(
+                {"_id": ObjectId(document_id)},
+                {"$set": {"processed_status": ProcessedStatus.FAILED}}
+            )
+        finally:
+            # Cleanup
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
 
 job_service = JobService()

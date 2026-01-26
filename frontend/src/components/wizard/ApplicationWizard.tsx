@@ -19,37 +19,84 @@ interface ApplicationMetadata {
 export const ApplicationWizard = () => {
   const [step, setStep] = useState<WizardStep>('upload');
   const [isLoading, setIsLoading] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   
   // Data State
   const [metadata, setMetadata] = useState<ApplicationMetadata>({ inventors: [] });
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
 
+  const pollJobStatus = async (jobId: string): Promise<void> => {
+    const pollInterval = 2000; // 2 seconds
+    const maxAttempts = 60; // 2 minutes timeout
+    
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const response = await api.get(`/jobs/${jobId}`);
+        const job = response.data;
+        
+        if (job.status === 'completed') {
+          return;
+        } else if (job.status === 'failed') {
+          throw new Error(job.error_details || 'Processing failed');
+        }
+        
+        setProcessingStatus(`Processing... ${job.progress_percentage}%`);
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      } catch (err) {
+        throw err;
+      }
+    }
+    throw new Error('Processing timed out');
+  };
+
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
     setError(null);
+    setProcessingStatus('Uploading...');
     
     const formData = new FormData();
     formData.append('file', file);
 
     const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
-    const endpoint = isCsv ? '/applications/parse-csv' : '/applications/analyze';
 
     try {
-      const response = await api.post(endpoint, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      
       if (isCsv) {
+        // CSV Workflow (Sync)
+        const response = await api.post('/applications/parse-csv', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        
         setMetadata({
           inventors: response.data,
           title: '',
           application_number: ''
         });
       } else {
-        setMetadata(response.data);
+        // PDF Workflow (Async)
+        // 1. Upload
+        formData.append('document_type', 'cover_sheet');
+        const uploadResponse = await api.post('/documents/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        const documentId = uploadResponse.data.id || uploadResponse.data._id; // Handle both aliases just in case
+
+        // 2. Start Parsing
+        setProcessingStatus('Initiating extraction...');
+        const parseResponse = await api.post(`/documents/${documentId}/parse`);
+        const jobId = parseResponse.data.job_id;
+
+        // 3. Poll for Completion
+        await pollJobStatus(jobId);
+
+        // 4. Fetch Results
+        setProcessingStatus('Finalizing...');
+        const docResponse = await api.get(`/documents/${documentId}`);
+        if (docResponse.data.extraction_data) {
+          setMetadata(docResponse.data.extraction_data);
+        } else {
+          throw new Error('No extraction data found in document');
+        }
       }
 
       setStep('review');
@@ -150,6 +197,11 @@ export const ApplicationWizard = () => {
             <p className="text-muted-foreground">Upload your Patent Cover Sheet (PDF) or Inventor List (CSV) to get started.</p>
           </div>
           <FileUpload onFileSelect={handleFileUpload} isLoading={isLoading} error={error} />
+          {isLoading && processingStatus && (
+            <div className="text-center text-sm text-muted-foreground animate-pulse">
+              {processingStatus}
+            </div>
+          )}
         </div>
       )}
 
@@ -195,7 +247,7 @@ export const ApplicationWizard = () => {
                 {isLoading ? (
                   <>
                     <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                    Generating PDF...
+                    {processingStatus || 'Processing...'}
                   </>
                 ) : (
                   <>
