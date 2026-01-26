@@ -7,13 +7,15 @@ import { Button } from '@/components/ui/button';
 interface FileUploadProps {
   onFileSelect: (file: File) => void;
   isLoading?: boolean;
+  uploadProgress?: number;
   error?: string | null;
 }
 
-export const FileUpload: React.FC<FileUploadProps> = ({ 
-  onFileSelect, 
+export const FileUpload: React.FC<FileUploadProps> = ({
+  onFileSelect,
   isLoading = false,
-  error = null 
+  uploadProgress = 0,
+  error = null
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -77,10 +79,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             )}
           </div>
 
-          <div className="text-center space-y-2">
+          <div className="text-center space-y-2 w-full max-w-sm">
             <h3 className="text-lg font-semibold">
               {isLoading ? "Processing Document..." : "Upload your Patent Cover Sheet (PDF) or Inventor List (CSV)"}
             </h3>
+            
+
             <p className="text-sm text-muted-foreground max-w-xs mx-auto">
               {error || "Drag and drop your PDF or CSV here, or click to browse"}
             </p>

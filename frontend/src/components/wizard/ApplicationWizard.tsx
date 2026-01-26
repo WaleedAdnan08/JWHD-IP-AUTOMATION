@@ -19,6 +19,7 @@ interface ApplicationMetadata {
 export const ApplicationWizard = () => {
   const [step, setStep] = useState<WizardStep>('upload');
   const [isLoading, setIsLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [processingStatus, setProcessingStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   
@@ -36,11 +37,27 @@ export const ApplicationWizard = () => {
         const job = response.data;
         
         if (job.status === 'completed') {
+          setUploadProgress(100);
           return;
         } else if (job.status === 'failed') {
           throw new Error(job.error_details || 'Processing failed');
         }
         
+        // Map job progress (0-100) to UI progress
+        // We already hit 100% on upload, so let's keep it there or restart
+        // Better UX: Show "Processing... X%" in the status text,
+        // but maybe keep the bar full or pulsating.
+        // Or re-purpose the bar:
+        // If we want the bar to reflect server processing, we can set it here.
+        // Only update progress if it's meaningful (avoid jumping back to 0 if we were at 100)
+        // Or, if we want to show server processing as a new phase, we could.
+        // But for continuity, let's keep it at 100 or animate a "processing" state.
+        // However, if the user sees "stuck at 30%", forcing 100% after upload (above) fixes the main issue.
+        // Let's just allow server updates if they exist, but maybe keep it high.
+        if (job.progress_percentage) {
+             setUploadProgress(prev => Math.max(prev, job.progress_percentage || 0));
+        }
+
         setProcessingStatus(`Processing... ${job.progress_percentage}%`);
         await new Promise(resolve => setTimeout(resolve, pollInterval));
       } catch (err) {
@@ -52,6 +69,7 @@ export const ApplicationWizard = () => {
 
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
+    setUploadProgress(0);
     setError(null);
     setProcessingStatus('Uploading...');
     
@@ -61,11 +79,17 @@ export const ApplicationWizard = () => {
     const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
 
     try {
+      const config = {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent: any) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(percentCompleted);
+        },
+      };
+
       if (isCsv) {
         // CSV Workflow (Sync)
-        const response = await api.post('/applications/parse-csv', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
+        const response = await api.post('/applications/parse-csv', formData, config);
         
         setMetadata({
           inventors: response.data,
@@ -76,9 +100,7 @@ export const ApplicationWizard = () => {
         // PDF Workflow (Async)
         // 1. Upload
         formData.append('document_type', 'cover_sheet');
-        const uploadResponse = await api.post('/documents/upload', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
+        const uploadResponse = await api.post('/documents/upload', formData, config);
         const documentId = uploadResponse.data.id || uploadResponse.data._id; // Handle both aliases just in case
 
         // 2. Start Parsing
@@ -196,10 +218,25 @@ export const ApplicationWizard = () => {
             <h1 className="text-3xl font-bold tracking-tight">New Application</h1>
             <p className="text-muted-foreground">Upload your Patent Cover Sheet (PDF) or Inventor List (CSV) to get started.</p>
           </div>
-          <FileUpload onFileSelect={handleFileUpload} isLoading={isLoading} error={error} />
-          {isLoading && processingStatus && (
-            <div className="text-center text-sm text-muted-foreground animate-pulse">
-              {processingStatus}
+          <FileUpload
+            onFileSelect={handleFileUpload}
+            isLoading={isLoading}
+            uploadProgress={uploadProgress}
+            error={error}
+          />
+          {isLoading && (
+            <div className="w-full max-w-xl mx-auto space-y-2">
+               {uploadProgress > 0 && (
+                 <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-300 ease-out"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                 </div>
+               )}
+               <div className="text-center text-sm text-muted-foreground animate-pulse">
+                  {processingStatus}
+               </div>
             </div>
           )}
         </div>

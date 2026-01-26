@@ -90,6 +90,64 @@ async def parse_csv(file: UploadFile = File(...)):
             detail=f"Failed to parse CSV: {str(e)}"
         )
 
+@router.post("/import-csv", status_code=status.HTTP_201_CREATED)
+async def import_csv(
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_database)
+):
+    """
+    Import a CSV file, create a new application record, and return the application_id.
+    """
+    # 1. Parse CSV
+    # Validate file extension
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only CSV files are supported"
+        )
+    
+    try:
+        content = await file.read()
+        inventors = parse_inventors_csv(content)
+    except Exception as e:
+        logger.error(f"CSV parsing failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to parse CSV: {str(e)}"
+        )
+
+    # 2. Create Application Record
+    try:
+        # Create a basic application with the imported inventors
+        app_in = PatentApplicationCreate(
+            title="Imported via CSV", # Placeholder
+            inventors=inventors,
+            workflow_status="uploaded" # Using string to avoid enum import issues if tricky
+        )
+        
+        app_db = PatentApplicationInDB(
+            **app_in.model_dump(),
+            created_by=current_user.id
+        )
+        
+        doc = app_db.model_dump(by_alias=True)
+        
+        # Insert
+        new_app = await db.patent_applications.insert_one(doc)
+        
+        return {
+            "application_id": str(new_app.inserted_id),
+            "message": f"Successfully imported {len(inventors)} inventors."
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to create application from CSV: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create application record"
+        )
+
 @router.post("/", response_model=PatentApplicationResponse, status_code=status.HTTP_201_CREATED)
 async def create_application(
     application_in: PatentApplicationCreate,

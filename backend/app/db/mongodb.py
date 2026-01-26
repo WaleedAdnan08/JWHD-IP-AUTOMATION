@@ -37,6 +37,8 @@ async def create_indexes():
         # Audit Logs
         await database.audit_logs.create_index("created_at")
         await database.audit_logs.create_index("user_id")
+        # Compound index for efficient user-specific date range queries
+        await database.audit_logs.create_index([("user_id", 1), ("created_at", -1)])
         
         logging.info("Database indexes created successfully.")
     except Exception as e:
