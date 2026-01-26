@@ -145,8 +145,8 @@ async def parse_document(
         # 3. Schedule Background Task
         # We need to import the task function here or inside the service
         # To avoid circular imports, we'll implement the task orchestration in job_service
-        background_tasks.add_task(
-            job_service.process_document_extraction,
+        from app.worker import process_document_extraction_task
+        process_document_extraction_task.delay(
             job_id=job_id,
             document_id=document_id,
             storage_key=doc["storage_key"]

@@ -14,6 +14,7 @@ router = APIRouter()
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     user: UserResponse
 
@@ -55,6 +56,10 @@ async def login_access_token(
         data=token_data, expires_delta=access_token_expires
     )
     
+    refresh_token = security.create_refresh_token(
+        data={"sub": str(user["_id"])}
+    )
+    
     await audit_service.log_event(
         user_id=str(user["_id"]),
         event_type="login_success",
@@ -63,6 +68,7 @@ async def login_access_token(
 
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": UserResponse(**user)
     }

@@ -57,6 +57,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = (token: string, userData: User) => {
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
+    // Set cookie for middleware access (expires in 7 days to match refresh token potential)
+    document.cookie = `token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
     setUser(userData);
     router.push('/dashboard');
   };
@@ -64,6 +66,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    // Remove cookie
+    document.cookie = 'token=; path=/; max-age=0';
     setUser(null);
     router.push('/login');
   };
