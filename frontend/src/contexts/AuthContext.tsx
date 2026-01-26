@@ -37,15 +37,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const initAuth = async () => {
+      console.log('AuthContext: Initializing...');
       const token = localStorage.getItem('token');
       const storedUser = localStorage.getItem('user');
 
       if (token && storedUser) {
+        console.log('AuthContext: Found token and user in localStorage');
         try {
           setUser(JSON.parse(storedUser));
         } catch (error) {
-          console.error("Failed to parse user data", error);
+          console.error("AuthContext: Failed to parse user data", error);
           logout();
+        }
+      } else {
+        console.log('AuthContext: No complete session in localStorage, checking cookies...');
+        // Fallback: Check for cookie-based session if local storage is empty
+        // This handles cases where middleware passes the user through (valid cookie)
+        // but local storage is empty/cleared
+        const cookies = document.cookie.split(';').reduce((acc, cookie) => {
+          const parts = cookie.trim().split('=');
+          if (parts.length >= 2) {
+             const key = parts[0];
+             const value = parts.slice(1).join('=');
+             acc[key] = value;
+          }
+          return acc;
+        }, {} as Record<string, string>);
+
+        console.log('AuthContext: Cookies found:', cookies);
+
+        if (cookies.token) {
+          console.log('AuthContext: Found token cookie, attempting to restore session...');
+          try {
+            // Restore session from server
+            const response = await api.get('/auth/me', {
+              headers: { Authorization: `Bearer ${cookies.token}` }
+            });
+            console.log('AuthContext: Session restored successfully', response.data);
+            
+            // Re-sync local storage
+            localStorage.setItem('token', cookies.token);
+            localStorage.setItem('user', JSON.stringify(response.data));
+            setUser(response.data);
+          } catch (error) {
+            console.error("AuthContext: Failed to restore session from cookie", error);
+            // If cookie is invalid, force logout to clear it and redirect to login
+            logout();
+          }
+        } else {
+           console.log('AuthContext: No token cookie found');
         }
       }
       setLoading(false);
@@ -63,11 +103,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     router.push('/dashboard');
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch (error) {
+      console.error("Logout API call failed", error);
+    }
+
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    // Remove cookie
+    
+    // Remove cookie with various path/domain options to be safe
     document.cookie = 'token=; path=/; max-age=0';
+    document.cookie = 'token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    document.cookie = 'token=; path=/; max-age=0; SameSite=Lax';
+    
     setUser(null);
     router.push('/login');
   };

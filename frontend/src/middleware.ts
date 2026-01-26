@@ -34,9 +34,11 @@ export function middleware(request: NextRequest) {
   }
 
   // If trying to access login page while already authenticated
-  if (isPublicRoute && token && request.nextUrl.pathname === '/login') {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
-  }
+  // REMOVED: This causes infinite loops if the token is invalid/stuck.
+  // We handle "already logged in" redirection on the client side instead.
+  // if (isPublicRoute && token && request.nextUrl.pathname === '/login') {
+  //   return NextResponse.redirect(new URL('/dashboard', request.url));
+  // }
 
   return NextResponse.next();
 }

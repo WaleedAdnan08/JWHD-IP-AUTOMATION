@@ -1,10 +1,11 @@
 from datetime import timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from app.core import security
 from app.core.config import settings
 from app.db.mongodb import get_database
+from app.api import deps
 from app.models.user import UserCreate, UserResponse, UserInDB
 from app.services.audit import audit_service
 from motor.motor_asyncio import AsyncIOMotorDatabase
