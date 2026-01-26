@@ -1,4 +1,5 @@
 from datetime import datetime
+import datetime as dt_module
 from typing import Optional, Dict, Any
 from app.db.mongodb import get_database
 from app.models.job import JobStatus, JobType, ProcessingJobInDB, ProcessingJobCreate, ProcessingJobResponse
@@ -49,6 +50,24 @@ class JobService:
         if job:
             return ProcessingJobResponse(**job)
         return None
+
+    async def cleanup_old_jobs(self, days: int = 7):
+        """
+        Cleanup jobs older than specified days.
+        """
+        try:
+            db = await get_database()
+            cutoff_date = datetime.utcnow() - dt_module.timedelta(days=days)
+            
+            result = await db.processing_jobs.delete_many({
+                "updated_at": {"$lt": cutoff_date},
+                "status": {"$in": [JobStatus.COMPLETED, JobStatus.FAILED]}
+            })
+            
+            if result.deleted_count > 0:
+                logger.info(f"Cleaned up {result.deleted_count} old jobs (older than {days} days)")
+        except Exception as e:
+            logger.error(f"Failed to cleanup old jobs: {e}")
 
     async def process_document_extraction(self, job_id: str, document_id: str, storage_key: str):
         """

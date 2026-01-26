@@ -1,18 +1,23 @@
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from app.models.patent_application import PatentApplicationMetadata, Inventor
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject
+from app.models.patent_application import PatentApplicationMetadata
 import os
-import sys
 import logging
+import io
 
 logger = logging.getLogger(__name__)
 
 class ADSGenerator:
+    def __init__(self):
+        self.template_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
+            "templates", 
+            "pto_sb_14_template.pdf"
+        )
+
     def generate_ads_pdf(self, data: PatentApplicationMetadata, output_path: str) -> str:
         """
-        Generates a PDF summary of the patent application data.
+        Generates a filled ADS PDF by populating the official PTO/SB/14 template.
         
         Args:
             data: The PatentApplicationMetadata object containing the data.
@@ -21,80 +26,68 @@ class ADSGenerator:
         Returns:
             The path to the generated PDF.
         """
-        logger.info(f"Generating ADS PDF at: {output_path}")
-        doc = SimpleDocTemplate(output_path, pagesize=letter)
-        elements = []
-        styles = getSampleStyleSheet()
+        logger.info(f"Generating ADS PDF at: {output_path} using template: {self.template_path}")
         
-        # Title
-        title_style = styles['Heading1']
-        elements.append(Paragraph("Application Data Sheet (Summary)", title_style))
-        elements.append(Spacer(1, 12))
-        
-        # Metadata Table
-        meta_data = [
-            ["Field", "Value"],
-            ["Title", data.title or "N/A"],
-            ["Application Number", data.application_number or "N/A"],
-            ["Filing Date", data.filing_date or "N/A"],
-            ["Entity Status", data.entity_status or "N/A"],
-        ]
-        
-        # Add basic styling to metadata table
-        t = Table(meta_data, colWidths=[150, 350])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(t)
-        elements.append(Spacer(1, 24))
-        
-        # Inventors Section
-        elements.append(Paragraph("Inventors", styles['Heading2']))
-        elements.append(Spacer(1, 12))
-        
-        if data.inventors:
-            for idx, inv in enumerate(data.inventors, 1):
-                # Construct full name
-                full_name_parts = [p for p in [inv.first_name, inv.middle_name, inv.last_name] if p]
-                full_name = " ".join(full_name_parts)
-                if not full_name and inv.name:
-                    full_name = inv.name
-                if not full_name:
-                    full_name = "N/A"
+        if not os.path.exists(self.template_path):
+            raise FileNotFoundError(f"ADS Template not found at: {self.template_path}")
 
-                inv_data = [
-                    [f"Inventor {idx}", ""],
-                    ["Name", full_name],
-                    ["Address", inv.street_address or "N/A"],
-                    ["City", inv.city or "N/A"],
-                    ["State", inv.state or "N/A"],
-                    ["Zip Code", inv.zip_code or "N/A"],
-                    ["Country", inv.country or "N/A"],
-                    ["Citizenship", inv.citizenship or "N/A"]
-                ]
+        try:
+            reader = PdfReader(self.template_path)
+            writer = PdfWriter()
+            writer.append(reader)
+            
+            # Map metadata to form fields
+            # Field names must match those in the PDF template
+            field_data = {
+                'Title': data.title or "",
+                'ApplicationNumber': data.application_number or "",
+                'FilingDate': data.filing_date or "",
+                'EntityStatus': data.entity_status or "",
+            }
+            
+            # Map inventors (Limit to what fits in template for now, typically 2-4 on first page)
+            # In a full implementation, we would duplicate pages for more inventors.
+            if data.inventors:
+                for idx, inv in enumerate(data.inventors):
+                    # 1-based index for field names
+                    i = idx + 1
+                    
+                    # Basic mapping
+                    field_data[f'GivenName_{i}'] = inv.first_name or ""
+                    field_data[f'FamilyName_{i}'] = inv.last_name or ""
+                    field_data[f'City_{i}'] = inv.city or ""
+                    field_data[f'State_{i}'] = inv.state or ""
+                    field_data[f'Country_{i}'] = inv.country or ""
+                    
+                    # Address logic
+                    full_address = inv.street_address or ""
+                    if not full_address and inv.name:
+                         # Fallback if we only have raw name/address strings
+                         pass
+                    field_data[f'Address_{i}'] = full_address
+
+            # Update form fields
+            # Depending on pypdf version, we might need to update fields on specific pages
+            # or globally if supported. Standard way is per page.
+            for page in writer.pages:
+                writer.update_page_form_field_values(
+                    page, field_data, auto_regenerate=False
+                )
+            
+            # Write output
+            with open(output_path, "wb") as output_stream:
+                writer.write(output_stream)
                 
-                inv_table = Table(inv_data, colWidths=[150, 350])
-                inv_table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (1, 0), colors.lightgrey),
-                    ('FONTNAME', (0, 0), (1, 0), 'Helvetica-Bold'),
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ]))
-                elements.append(inv_table)
-                elements.append(Spacer(1, 12))
-        else:
-            elements.append(Paragraph("No inventors listed.", styles['Normal']))
+            logger.info(f"Successfully filled ADS PDF.")
+            return output_path
 
-        doc.build(elements)
-        return output_path
+        except Exception as e:
+            logger.error(f"Failed to fill ADS PDF: {e}")
+            raise e
 
 if __name__ == "__main__":
     # Setup path to run standalone
+    import sys
     current_dir = os.path.dirname(os.path.abspath(__file__))
     backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
     sys.path.append(backend_dir)
@@ -126,13 +119,14 @@ if __name__ == "__main__":
                 last_name="Smith",
                 city="New York",
                 state="NY",
-                country="US"
+                country="US",
+                street_address="456 Elm St"
             )
         ]
     )
     
-    output = "dummy_ads.pdf"
-    print(f"Generating dummy PDF at {output}...")
+    output = "filled_ads.pdf"
+    print(f"Generating filled PDF at {output}...")
     try:
         generator.generate_ads_pdf(dummy_data, output)
         print("Successfully generated PDF.")

@@ -18,3 +18,8 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated Files
+filled_ads.pdf
+test_patent.pdf
+tests/test_patent.pdf

@@ -15,11 +15,17 @@ setup_logging(level="INFO")
 from app.db.mongodb import connect_to_mongo, close_mongo_connection, db
 from app.services.storage import storage_service
 from app.services.llm import llm_service
+from app.services.jobs import job_service
 from app.api.api import api_router
+import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_to_mongo()
+    
+    # Run cleanup on startup
+    asyncio.create_task(job_service.cleanup_old_jobs(days=7))
+    
     yield
     await close_mongo_connection()
 
