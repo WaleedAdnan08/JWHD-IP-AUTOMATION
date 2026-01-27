@@ -4,7 +4,8 @@ from google.api_core.exceptions import ResourceExhausted
 from fastapi import HTTPException, status
 from app.core.config import settings
 from app.models.patent_application import PatentApplicationMetadata
-from app.models.extraction import ExtractionMetadata, ExtractionResult, ConfidenceLevel, DocumentQuality
+# from app.models.extraction import ExtractionMetadata, ExtractionResult, ConfidenceLevel, DocumentQuality
+from app.models.extraction import ExtractionResult
 import logging
 import json
 import time
@@ -900,134 +901,134 @@ class LLMService:
 
     # --- DocuMind Extraction Pipeline Methods ---
 
-    async def extract_document(self, file_path: str) -> ExtractionResult:
-        """
-        Main entry point for document extraction.
-        Decides whether to process directly or in chunks.
-        """
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    # async def extract_document(self, file_path: str) -> ExtractionResult:
+    #     """
+    #     Main entry point for document extraction.
+    #     Decides whether to process directly or in chunks.
+    #     """
+    #     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
         
-        # Get page count
-        try:
-            reader = PdfReader(file_path)
-            page_count = len(reader.pages)
-        except Exception:
-            page_count = 0 # Fallback
+    #     # Get page count
+    #     try:
+    #         reader = PdfReader(file_path)
+    #         page_count = len(reader.pages)
+    #     except Exception:
+    #         page_count = 0 # Fallback
             
-        should_chunk = (
-            file_size_mb > settings.LARGE_FILE_THRESHOLD_MB or 
-            page_count > settings.LARGE_FILE_PAGE_THRESHOLD
-        )
+    #     should_chunk = (
+    #         file_size_mb > settings.LARGE_FILE_THRESHOLD_MB or 
+    #         page_count > settings.LARGE_FILE_PAGE_THRESHOLD
+    #     )
         
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
+    #     with open(file_path, "rb") as f:
+    #         file_bytes = f.read()
 
-        if should_chunk:
-            logger.info(f"Document requires chunking (Size: {file_size_mb:.2f}MB, Pages: {page_count})")
-            return await self._extract_document_chunked(file_bytes, os.path.basename(file_path), page_count)
-        else:
-            logger.info(f"Processing document directly (Size: {file_size_mb:.2f}MB, Pages: {page_count})")
-            # For direct extraction, we can reuse the file_path upload to save bandwidth 
-            # if we hadn't already read bytes, but here we follow the pipeline logic
-            return await self._extract_document_direct(file_path)
+    #     if should_chunk:
+    #         logger.info(f"Document requires chunking (Size: {file_size_mb:.2f}MB, Pages: {page_count})")
+    #         return await self._extract_document_chunked(file_bytes, os.path.basename(file_path), page_count)
+    #     else:
+    #         logger.info(f"Processing document directly (Size: {file_size_mb:.2f}MB, Pages: {page_count})")
+    #         # For direct extraction, we can reuse the file_path upload to save bandwidth 
+    #         # if we hadn't already read bytes, but here we follow the pipeline logic
+    #         return await self._extract_document_direct(file_path)
 
-    async def _extract_document_direct(self, file_path: str) -> ExtractionResult:
-        """
-        Extract text from a small document in a single API call using Native PDF support.
-        """
-        # Upload file to Gemini
-        file_obj = await self.upload_file(file_path)
+    # async def _extract_document_direct(self, file_path: str) -> ExtractionResult:
+    #     """
+    #     Extract text from a small document in a single API call using Native PDF support.
+    #     """
+    #     # Upload file to Gemini
+    #     file_obj = await self.upload_file(file_path)
         
-        extraction_prompt = """
-        You are DocuMind, a High-Fidelity Document Digitization System.
+    #     extraction_prompt = """
+    #     You are DocuMind, a High-Fidelity Document Digitization System.
 
-        ## CORE PRINCIPLES
-        1. **NO HALLUCINATION** - Never invent, assume, or fabricate any information not explicitly visible in the document.
-        2. **NO SUMMARIZATION** - Extract the COMPLETE content of every page.
-        3. **PRESERVE FIDELITY** - Maintain the original spelling, punctuation, formatting structure.
+    #     ## CORE PRINCIPLES
+    #     1. **NO HALLUCINATION** - Never invent, assume, or fabricate any information not explicitly visible in the document.
+    #     2. **NO SUMMARIZATION** - Extract the COMPLETE content of every page.
+    #     3. **PRESERVE FIDELITY** - Maintain the original spelling, punctuation, formatting structure.
 
-        ## OUTPUT FORMAT
-        For each page, output in this exact format:
+    #     ## OUTPUT FORMAT
+    #     For each page, output in this exact format:
         
-        --- PAGE [number] ---
+    #     --- PAGE [number] ---
         
-        [Extract all visible text exactly as it appears, preserving structure]
+    #     [Extract all visible text exactly as it appears, preserving structure]
         
-        [Use annotations for non-text elements like: [Handwritten: ...], [Stamp: ...], [Table: ...]]
+    #     [Use annotations for non-text elements like: [Handwritten: ...], [Stamp: ...], [Table: ...]]
 
-        After ALL pages, provide:
+    #     After ALL pages, provide:
         
-        === DOCUMENT EXTRACTION SUMMARY ===
-        TOTAL PAGES: [count]
-        OVERALL DOCUMENT CONFIDENCE: [High/Medium/Low]
-        DOCUMENT QUALITY: [Excellent/Good/Fair/Poor]
-        HANDWRITING DETECTED: [Yes/No]
-        EXTRACTION NOTES: [Any important observations]
-        """
+    #     === DOCUMENT EXTRACTION SUMMARY ===
+    #     TOTAL PAGES: [count]
+    #     OVERALL DOCUMENT CONFIDENCE: [High/Medium/Low]
+    #     DOCUMENT QUALITY: [Excellent/Good/Fair/Poor]
+    #     HANDWRITING DETECTED: [Yes/No]
+    #     EXTRACTION NOTES: [Any important observations]
+    #     """
         
-        retries = settings.GEMINI_MAX_RETRIES
-        for attempt in range(retries):
-            try:
-                # We use the raw client directly here to get text output, not JSON
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=settings.GEMINI_MODEL,
-                    contents=[file_obj, extraction_prompt],
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        max_output_tokens=65536
-                    )
-                )
+    #     retries = settings.GEMINI_MAX_RETRIES
+    #     for attempt in range(retries):
+    #         try:
+    #             # We use the raw client directly here to get text output, not JSON
+    #             response = await asyncio.to_thread(
+    #                 self.client.models.generate_content,
+    #                 model=settings.GEMINI_MODEL,
+    #                 contents=[file_obj, extraction_prompt],
+    #                 config=types.GenerateContentConfig(
+    #                     temperature=0.0,
+    #                     max_output_tokens=65536
+    #                 )
+    #             )
                 
-                self._log_token_usage(response, "direct_extraction")
-                extracted_text = response.text
-                metadata_dict = self._parse_extraction_metadata(extracted_text, os.path.getsize(file_path))
+    #             self._log_token_usage(response, "direct_extraction")
+    #             extracted_text = response.text
+    #             metadata_dict = self._parse_extraction_metadata(extracted_text, os.path.getsize(file_path))
                 
-                return ExtractionResult(
-                    extracted_text=extracted_text,
-                    metadata=ExtractionMetadata(**metadata_dict)
-                )
+    #             return ExtractionResult(
+    #                 extracted_text=extracted_text,
+    #                 metadata=ExtractionMetadata(**metadata_dict)
+    #             )
             
-            except ResourceExhausted as re_err:
-                logger.warning(f"Gemini Rate Limit Exceeded during direct extraction: {re_err}")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="AI Service is currently busy (Rate Limit Exceeded). Please try again in a moment."
-                )
-            except Exception as e:
-                logger.warning(f"Direct extraction failed (attempt {attempt + 1}/{retries}): {e}")
-                if attempt == retries - 1:
-                    logger.error(f"Direct extraction failed after {retries} attempts: {e}")
-                    raise e
+    #         except ResourceExhausted as re_err:
+    #             logger.warning(f"Gemini Rate Limit Exceeded during direct extraction: {re_err}")
+    #             raise HTTPException(
+    #                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    #                 detail="AI Service is currently busy (Rate Limit Exceeded). Please try again in a moment."
+    #             )
+    #         except Exception as e:
+    #             logger.warning(f"Direct extraction failed (attempt {attempt + 1}/{retries}): {e}")
+    #             if attempt == retries - 1:
+    #                 logger.error(f"Direct extraction failed after {retries} attempts: {e}")
+    #                 raise e
                 
-                # Exponential backoff: 2s, 4s, 8s
-                wait_time = (2 ** (attempt + 1))
-                logger.info(f"Retrying in {wait_time} seconds...")
-                await asyncio.sleep(wait_time)
+    #             # Exponential backoff: 2s, 4s, 8s
+    #             wait_time = (2 ** (attempt + 1))
+    #             logger.info(f"Retrying in {wait_time} seconds...")
+    #             await asyncio.sleep(wait_time)
 
-    async def _extract_document_chunked(self, file_bytes: bytes, filename: str, total_pages: int) -> ExtractionResult:
-        """
-        Extract text from a large document using parallel chunk processing.
-        """
-        # Split document into chunks
-        chunks = self._chunk_pdf(file_bytes, settings.CHUNK_SIZE_PAGES)
-        total_chunks = len(chunks)
+    # async def _extract_document_chunked(self, file_bytes: bytes, filename: str, total_pages: int) -> ExtractionResult:
+    #     """
+    #     Extract text from a large document using parallel chunk processing.
+    #     """
+    #     # Split document into chunks
+    #     chunks = self._chunk_pdf(file_bytes, settings.CHUNK_SIZE_PAGES)
+    #     total_chunks = len(chunks)
         
-        # Semaphore for concurrency control
-        semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_EXTRACTIONS)
+    #     # Semaphore for concurrency control
+    #     semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_EXTRACTIONS)
 
-        async def extract_chunk(chunk_data: Tuple[bytes, int, int], chunk_index: int):
-            chunk_bytes, start_page, end_page = chunk_data
-            async with semaphore:
-                return await self._extract_single_chunk(
-                    chunk_bytes, chunk_index, total_chunks, start_page, end_page
-                )
+    #     async def extract_chunk(chunk_data: Tuple[bytes, int, int], chunk_index: int):
+    #         chunk_bytes, start_page, end_page = chunk_data
+    #         async with semaphore:
+    #             return await self._extract_single_chunk(
+    #                 chunk_bytes, chunk_index, total_chunks, start_page, end_page
+    #             )
 
-        # Process all chunks in parallel
-        tasks = [extract_chunk(chunk_data, idx) for idx, chunk_data in enumerate(chunks)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    #     # Process all chunks in parallel
+    #     tasks = [extract_chunk(chunk_data, idx) for idx, chunk_data in enumerate(chunks)]
+    #     results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        return self._aggregate_chunk_results(results, total_chunks, len(file_bytes))
+    #     return self._aggregate_chunk_results(results, total_chunks, len(file_bytes))
 
     async def _analyze_document_chunked_structured(
         self,
@@ -1331,84 +1332,84 @@ class LLMService:
             "success": False
         }
 
-    def _aggregate_chunk_results(self, results: List[Any], total_chunks: int, file_size: int) -> ExtractionResult:
-        """
-        Combine extraction results from multiple chunks.
-        """
-        successful_results = [r for r in results if isinstance(r, dict) and r.get("success")]
-        successful_results.sort(key=lambda x: x["chunk_index"])
+    # def _aggregate_chunk_results(self, results: List[Any], total_chunks: int, file_size: int) -> ExtractionResult:
+    #     """
+    #     Combine extraction results from multiple chunks.
+    #     """
+    #     successful_results = [r for r in results if isinstance(r, dict) and r.get("success")]
+    #     successful_results.sort(key=lambda x: x["chunk_index"])
 
-        combined_text_parts = []
-        for result in successful_results:
-            combined_text_parts.append(result["extracted_text"])
+    #     combined_text_parts = []
+    #     for result in successful_results:
+    #         combined_text_parts.append(result["extracted_text"])
 
-        combined_text = "\n\n".join(combined_text_parts)
+    #     combined_text = "\n\n".join(combined_text_parts)
         
-        failed_count = total_chunks - len(successful_results)
+    #     failed_count = total_chunks - len(successful_results)
         
-        metadata = ExtractionMetadata(
-            page_count=0, # Would need to parse from text or pass through
-            overall_confidence=ConfidenceLevel.LOW if failed_count > 0 else ConfidenceLevel.HIGH,
-            is_chunked=True,
-            chunk_count=total_chunks,
-            successful_chunks=len(successful_results),
-            failed_chunks=failed_count,
-            file_size_bytes=file_size
-        )
+    #     metadata = ExtractionMetadata(
+    #         page_count=0, # Would need to parse from text or pass through
+    #         overall_confidence=ConfidenceLevel.LOW if failed_count > 0 else ConfidenceLevel.HIGH,
+    #         is_chunked=True,
+    #         chunk_count=total_chunks,
+    #         successful_chunks=len(successful_results),
+    #         failed_chunks=failed_count,
+    #         file_size_bytes=file_size
+    #     )
         
-        return ExtractionResult(extracted_text=combined_text, metadata=metadata)
+    #     return ExtractionResult(extracted_text=combined_text, metadata=metadata)
 
-    def _parse_extraction_metadata(self, extracted_text: str, file_size: int) -> dict:
-        """
-        Parse metadata from LLM extraction output.
-        """
-        metadata = {
-            "page_count": 0,
-            "overall_confidence": "medium",
-            "document_quality": "good",
-            "has_handwriting": False,
-            "extraction_notes": None,
-            "file_size_bytes": file_size,
-            "uncertain_count": 0,
-            "illegible_count": 0
-        }
+    # def _parse_extraction_metadata(self, extracted_text: str, file_size: int) -> dict:
+    #     """
+    #     Parse metadata from LLM extraction output.
+    #     """
+    #     metadata = {
+    #         "page_count": 0,
+    #         "overall_confidence": "medium",
+    #         "document_quality": "good",
+    #         "has_handwriting": False,
+    #         "extraction_notes": None,
+    #         "file_size_bytes": file_size,
+    #         "uncertain_count": 0,
+    #         "illegible_count": 0
+    #     }
 
-        # Count pages from markers
-        page_markers = re.findall(r'--- PAGE (\d+) ---', extracted_text)
-        if page_markers:
-            metadata["page_count"] = len(page_markers)
+    #     # Count pages from markers
+    #     page_markers = re.findall(r'--- PAGE (\d+) ---', extracted_text)
+    #     if page_markers:
+    #         metadata["page_count"] = len(page_markers)
 
-        # Extract overall confidence
-        confidence_match = re.search(
-            r'OVERALL DOCUMENT CONFIDENCE:\s*(High|Medium|Low)',
-            extracted_text,
-            re.IGNORECASE
-        )
-        if confidence_match:
-            metadata["overall_confidence"] = confidence_match.group(1).lower()
+    #     # Extract overall confidence
+    #     confidence_match = re.search(
+    #         r'OVERALL DOCUMENT CONFIDENCE:\s*(High|Medium|Low)',
+    #         extracted_text,
+    #         re.IGNORECASE
+    #     )
+    #     if confidence_match:
+    #         metadata["overall_confidence"] = confidence_match.group(1).lower()
 
-        # Extract document quality
-        quality_match = re.search(
-            r'DOCUMENT QUALITY:\s*(Excellent|Good|Fair|Poor)',
-            extracted_text,
-            re.IGNORECASE
-        )
-        if quality_match:
-            metadata["document_quality"] = quality_match.group(1).lower()
+    #     # Extract document quality
+    #     quality_match = re.search(
+    #         r'DOCUMENT QUALITY:\s*(Excellent|Good|Fair|Poor)',
+    #         extracted_text,
+    #         re.IGNORECASE
+    #     )
+    #     if quality_match:
+    #         metadata["document_quality"] = quality_match.group(1).lower()
 
-        # Check for handwriting
-        handwriting_match = re.search(
-            r'HANDWRITING DETECTED:\s*(Yes|No)',
-            extracted_text,
-            re.IGNORECASE
-        )
-        if handwriting_match:
-            metadata["has_handwriting"] = handwriting_match.group(1).lower() == "yes"
+    #     # Check for handwriting
+    #     handwriting_match = re.search(
+    #         r'HANDWRITING DETECTED:\s*(Yes|No)',
+    #         extracted_text,
+    #         re.IGNORECASE
+    #     )
+    #     if handwriting_match:
+    #         metadata["has_handwriting"] = handwriting_match.group(1).lower() == "yes"
 
-        # Also check for handwriting annotations
-        if re.search(r'\[Handwritten:', extracted_text):
-            metadata["has_handwriting"] = True
+    #     # Also check for handwriting annotations
+    #     if re.search(r'\[Handwritten:', extracted_text):
+    #         metadata["has_handwriting"] = True
 
-        return metadata
+    #     return metadata
 
 llm_service = LLMService()

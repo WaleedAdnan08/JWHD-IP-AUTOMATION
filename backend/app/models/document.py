@@ -1,8 +1,9 @@
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import Optional, Any, Dict
+from typing import Optional, Union, Dict, Any
 from datetime import datetime
 from app.models.common import MongoBaseModel, PyObjectId
+from app.models.extraction import ExtractionResult
 
 class DocumentType(str, Enum):
     COVER_SHEET = "cover_sheet"
@@ -26,7 +27,7 @@ class DocumentBase(BaseModel):
     mime_type: str
     storage_key: str
     processed_status: ProcessedStatus = ProcessedStatus.PENDING
-    extraction_data: Optional[Dict[str, Any]] = None
+    extraction_data: Optional[ExtractionResult] = None
 
 class DocumentCreate(DocumentBase):
     application_id: Optional[PyObjectId] = None
@@ -41,3 +42,5 @@ class DocumentResponse(MongoBaseModel, DocumentBase):
     application_id: Optional[str] = None
     user_id: str
     upload_date: datetime
+    # Loosen the type for the response model to handle cases where data is not yet a full ExtractionResult
+    extraction_data: Optional[Union[ExtractionResult, Dict[str, Any]]] = None

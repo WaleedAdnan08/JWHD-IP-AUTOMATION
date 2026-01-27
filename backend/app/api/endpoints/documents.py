@@ -21,8 +21,8 @@ async def upload_document(
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database)
 ):
-    if file.content_type not in ["application/pdf", "text/csv", "application/vnd.ms-excel"]:
-        raise HTTPException(status_code=400, detail="Invalid file type. Only PDF and CSV are allowed.")
+    if file.content_type not in ["application/pdf", "text/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only PDF, CSV, and DOCX are allowed.")
     
     if file.size > 50 * 1024 * 1024: # 50MB
         raise HTTPException(status_code=413, detail="File too large. Limit is 50MB.")

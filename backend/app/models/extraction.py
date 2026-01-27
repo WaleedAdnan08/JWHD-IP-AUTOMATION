@@ -1,34 +1,54 @@
-from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class ConfidenceLevel(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
 
-class DocumentQuality(str, Enum):
-    EXCELLENT = "excellent"
-    GOOD = "good"
-    FAIR = "fair"
-    POOR = "poor"
+class Provenance(BaseModel):
+    source_page: int
+    source_section: Optional[str] = None
+    source_paragraph: Optional[str] = None
+    text_coordinates: Optional[List[float]] = None
 
-class ExtractionMetadata(BaseModel):
-    page_count: int = 0
-    overall_confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
-    document_quality: DocumentQuality = DocumentQuality.GOOD
-    has_handwriting: bool = False
-    extraction_notes: Optional[str] = None
-    file_size_bytes: int = 0
-    mime_type: str = "application/pdf"
-    is_chunked: bool = False
-    chunk_count: Optional[int] = None
-    successful_chunks: Optional[int] = None
-    failed_chunks: Optional[int] = None
-    uncertain_count: int = 0
-    illegible_count: int = 0
+class Inventor(BaseModel):
+    name: str
+    address: str
+    citizenship: str
+    provenance: Provenance
+    confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
+
+class Rejection(BaseModel):
+    rejection_type: str
+    claims: List[str]
+    reasoning: str
+    prior_art_cited: List[str]
+    provenance: Provenance
+    confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
+
+class PriorArt(BaseModel):
+    reference_type: str
+    identifier: str
+    title: Optional[str] = None
+    date: Optional[str] = None
+    relevant_claims: List[str]
+    provenance: Provenance
+    confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
+
+class Claim(BaseModel):
+    claim_number: int
+    text: str
+    dependencies: List[int]
+    provenance: Provenance
+    confidence: ConfidenceLevel = ConfidenceLevel.MEDIUM
 
 class ExtractionResult(BaseModel):
-    extracted_text: str
-    metadata: ExtractionMetadata
+    application_title: Optional[str] = None
+    inventors: List[Inventor] = Field(default_factory=list)
+    rejections: List[Rejection] = Field(default_factory=list)
+    prior_arts: List[PriorArt] = Field(default_factory=list)
+    claims: List[Claim] = Field(default_factory=list)
+    raw_text: str
+    schema_version: str = "1.0.0"

@@ -11,6 +11,12 @@ interface FileUploadProps {
   error?: string | null;
 }
 
+const ACCEPTED_FILE_TYPES = [
+  'application/pdf',
+  'text/csv',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+];
+
 export const FileUpload: React.FC<FileUploadProps> = ({
   onFileSelect,
   isLoading = false,
@@ -36,8 +42,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
     
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
-      // Accept PDF or CSV files
-      if (file.type === 'application/pdf' || file.type === 'text/csv' || file.name.endsWith('.csv')) {
+      if (ACCEPTED_FILE_TYPES.includes(file.type)) {
         setSelectedFile(file);
         onFileSelect(file);
       }
@@ -81,12 +86,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
           <div className="text-center space-y-2 w-full max-w-sm">
             <h3 className="text-lg font-semibold">
-              {isLoading ? "Processing Document..." : "Upload your Patent Cover Sheet (PDF) or Inventor List (CSV)"}
+              {isLoading ? "Processing Document..." : "Upload Your Documents"}
             </h3>
             
 
             <p className="text-sm text-muted-foreground max-w-xs mx-auto">
-              {error || "Drag and drop your PDF or CSV here, or click to browse"}
+              {error || "Drag and drop files here, or click to browse"}
             </p>
           </div>
 
@@ -94,7 +99,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             <div className="flex flex-col items-center gap-4 w-full">
               <input
                 type="file"
-                accept=".pdf,.csv"
+                accept=".pdf,.csv,.docx"
                 className="hidden"
                 id="file-upload"
                 onChange={handleFileInput}
@@ -119,7 +124,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
       <div className="mt-6 text-center">
         <p className="text-xs text-muted-foreground">
-          Supported Formats: PDF, CSV (Max 50MB)
+          Supported Formats: PDF, CSV, DOCX (Max 50MB)
         </p>
       </div>
     </div>

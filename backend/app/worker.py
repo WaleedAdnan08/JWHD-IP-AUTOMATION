@@ -25,11 +25,19 @@ def write_log_entry(log_data: dict):
         # Fallback in case of error to ensure we see the failure in worker logs
         print(f"Error processing log entry: {e}")
 
-@celery_app.task(acks_late=True)
-def process_document_extraction_task(job_id: str, document_id: str, storage_key: str):
+@celery_app.task(
+    bind=True,
+    acks_late=True,
+    autoretry_for=(Exception,),
+    max_retries=3,
+    retry_backoff=True,
+    retry_backoff_max=125,
+    retry_jitter=True
+)
+def process_document_extraction_task(self, job_id: str, document_id: str, storage_key: str):
     """
     Celery task to process document extraction.
-    Wraps the async job_service method.
+    Wraps the async job_service method and includes automatic retry logic.
     """
     import asyncio
     from app.services.jobs import job_service
@@ -47,4 +55,5 @@ def process_document_extraction_task(job_id: str, document_id: str, storage_key:
         asyncio.run(run_async_task())
     except Exception as e:
         worker_logger.error(f"Failed to run async extraction task: {e}")
-        # In a real scenario, you might want to retry here
+        # The autoretry_for argument will handle the retry logic
+        raise
