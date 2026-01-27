@@ -7,6 +7,7 @@ from app.models.patent_application import PatentApplicationMetadata
 from app.models.extraction import ExtractionMetadata, ExtractionResult, ConfidenceLevel, DocumentQuality
 import logging
 import json
+import time
 import re
 import os
 import asyncio
@@ -144,6 +145,7 @@ class LLMService:
                         raise ValueError("Prompt cannot be empty")
 
                     # Run sync Gemini call in thread pool
+                    start_time = time.time()
                     try:
                         logger.info(f"Calling Gemini API with model: {settings.GEMINI_MODEL}")
                         response = await asyncio.to_thread(
@@ -157,6 +159,10 @@ class LLMService:
                             )
                         )
                         logger.info("Gemini API call returned")
+                        
+                        # Record latency
+                        duration = time.time() - start_time
+                        
                         self._log_token_usage(response, "generate_structured_content")
                     except ResourceExhausted as re_err:
                         logger.warning(f"Gemini Rate Limit Exceeded: {re_err}")

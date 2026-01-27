@@ -1,6 +1,7 @@
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
 import logging
+import dns.resolver
 
 class MongoDB:
     client: AsyncIOMotorClient = None
@@ -47,6 +48,10 @@ async def create_indexes():
 
 async def connect_to_mongo():
     try:
+        # Fix for DNS resolution issues on some networks
+        dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
+        dns.resolver.default_resolver.nameservers = ['8.8.8.8', '8.8.4.4']
+
         db.client = AsyncIOMotorClient(
             settings.MONGODB_URL,
             maxPoolSize=20,

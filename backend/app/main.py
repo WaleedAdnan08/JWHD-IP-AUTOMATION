@@ -18,22 +18,22 @@ from app.services.llm import llm_service
 from app.services.jobs import job_service
 from app.api.api import api_router
 import asyncio
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await connect_to_mongo()
-    
-    # Run cleanup on startup
-    asyncio.create_task(job_service.cleanup_old_jobs(days=7))
-    
-    yield
-    await close_mongo_connection()
+import os
+import shutil
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan
+    openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+@app.on_event("startup")
+async def startup_event():
+    await connect_to_mongo()
+    asyncio.create_task(job_service.cleanup_old_jobs(days=7))
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await close_mongo_connection()
 
 # Register Exception Handlers
 app.add_exception_handler(HTTPException, http_exception_handler)

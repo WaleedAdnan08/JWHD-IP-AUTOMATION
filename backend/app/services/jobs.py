@@ -8,6 +8,7 @@ from bson import ObjectId
 import logging
 import os
 import uuid
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,8 @@ class JobService:
         job = await db.processing_jobs.find_one({"_id": ObjectId(job_id)})
         user_id = str(job["user_id"]) if job else "system"
         
+        job_start_time = time.time()
+        
         try:
             # 1. Update Job Status to PROCESSING
             logger.info(f"Setting Job {job_id} to PROCESSING (10%)")
@@ -157,6 +160,7 @@ class JobService:
                 {"_id": ObjectId(document_id)},
                 {"$set": {"processed_status": ProcessedStatus.FAILED}}
             )
+            
         finally:
             pass
 
