@@ -117,7 +117,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Set cookie for middleware access (expires in 7 days to match refresh token potential)
     document.cookie = `token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
     setUser(userData);
-    router.push('/dashboard');
+    
+    // Force a full page load to ensure the middleware sees the new cookie immediately.
+    // Client-side routing (router.push) can sometimes race with cookie propagation to middleware.
+    window.location.href = '/dashboard';
   };
 
   const logout = async () => {
