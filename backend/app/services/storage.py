@@ -94,4 +94,17 @@ class StorageService:
             logging.error(f"Failed to download blob {blob_name}: {e}")
             raise e
 
+    def download_as_bytes(self, blob_name: str) -> bytes:
+        """
+        Downloads a blob as bytes.
+        """
+        try:
+            blob = self.bucket.blob(blob_name)
+            content = blob.download_as_bytes()
+            logging.info(f"Downloaded blob {blob_name} as bytes (Size: {len(content)})")
+            return content
+        except Exception as e:
+            logging.error(f"Failed to download blob {blob_name} as bytes: {e}")
+            raise e
+
 storage_service = StorageService()

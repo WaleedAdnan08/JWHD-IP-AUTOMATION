@@ -31,6 +31,7 @@ class PatentApplicationMetadata(BaseModel):
     entity_status: Optional[str] = None
     inventors: List[Inventor] = []
     extraction_confidence: Optional[float] = None
+    debug_reasoning: Optional[str] = Field(None, alias="_debug_reasoning")
 
 class PatentApplicationBase(BaseModel):
     application_number: Optional[str] = None

@@ -12,7 +12,8 @@ import os
 import asyncio
 import io
 import random
-from typing import Dict, Any, Optional, List, Tuple
+from datetime import datetime
+from typing import Dict, Any, Optional, List, Tuple, Callable, Awaitable, Union, IO
 from pypdf import PdfReader, PdfWriter
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -80,19 +81,22 @@ class LLMService:
             logger.error(f"Failed to initialize Gemini client: {e}", exc_info=True)
             self.client = None
 
-    async def upload_file(self, file_path: str, mime_type: str = "application/pdf"):
+    async def upload_file(self, file: Union[str, IO], mime_type: str = "application/pdf"):
         """
         Uploads a file to Gemini for multimodal processing.
+        Accepts either a file path (str) or a file-like object (IO).
         """
         if not self.client:
             raise Exception("LLM service not initialized")
         
         try:
-            logger.info(f"Uploading file to Gemini: {file_path}")
+            log_name = file if isinstance(file, str) else "memory_stream"
+            logger.info(f"Uploading file to Gemini: {log_name}")
+            
             # Run in thread pool since library is synchronous
             file_obj = await asyncio.to_thread(
                 self.client.files.upload,
-                file=file_path,
+                file=file,
                 config={'mime_type': mime_type}
             )
             logger.info(f"File uploaded successfully: {file_obj.name}")
@@ -213,158 +217,181 @@ class LLMService:
             logger.critical(f"CRITICAL ERROR in generate_structured_content: {outer_e}", exc_info=True)
             raise outer_e
 
-    async def analyze_cover_sheet(self, file_path: str) -> PatentApplicationMetadata:
+    async def analyze_cover_sheet(
+        self,
+        file_path: str,
+        file_content: Optional[bytes] = None,
+        progress_callback: Optional[Callable[[int, str], Awaitable[None]]] = None
+    ) -> PatentApplicationMetadata:
         """
-        Analyzes the cover sheet PDF.
-        Strategy 1: Check for XFA (Dynamic Form) XML data first.
-        Strategy 2: Fallback to HYBRID PAGE-BY-PAGE strategy (Vision + Text).
+        Analyzes the cover sheet PDF with Parallel Execution optimization.
+        Run Local XFA Check AND Remote File Upload simultaneously to minimize latency.
+        
+        Args:
+            file_path: Path to the file (used for logging/extension even if content is provided)
+            file_content: Optional raw bytes of the file. If provided, avoids disk reads.
+            progress_callback: Optional callback for status updates
         """
         logger.info(f"--- ANALYZING PDF WITH GEMINI: {file_path} ---")
+        logger.info(f"Concurrency Limit: {settings.MAX_CONCURRENT_EXTRACTIONS}")
+        
+        # Prepare upload source (BytesIO or Path)
+        if file_content:
+            upload_source = io.BytesIO(file_content)
+        else:
+            upload_source = file_path
 
-        # STRATEGY 1: Check for XFA Dynamic Form Data
+        if progress_callback:
+            logger.info("Reporting progress: 10%")
+            await progress_callback(10, "Initiating parallel analysis...")
+
+        # Determine page count to decide strategy
+        page_count = 0
         try:
-            xfa_data = await self._extract_xfa_data(file_path)
+            if file_content:
+                reader = PdfReader(io.BytesIO(file_content))
+            else:
+                reader = PdfReader(file_path)
+            page_count = len(reader.pages)
+            logger.info(f"PDF Page Count: {page_count}")
+        except Exception as e:
+            logger.warning(f"Failed to get page count: {e}")
+
+        # STRATEGY 1: Text-First Extraction (Local CPU)
+        # We try to extract text locally using pypdf. If successful, we skip file upload entirely.
+        try:
+            text_start = datetime.utcnow()
+            text_content = await self._extract_text_locally(file_path, file_content)
+            
+            # Check if text is sufficient (not just empty pages or headers)
+            # We look for a reasonable amount of text or specific form markers
+            # Remove standard markers to see if there's actual content
+            clean_text = re.sub(r'--- PAGE \d+ ---', '', text_content)
+            clean_text = clean_text.replace("--- FORM FIELD DATA", "").replace("--- END FORM DATA ---", "")
+            clean_text = clean_text.replace("[EMPTY PAGE TEXT - LIKELY IMAGE OR XFA]", "")
+            clean_text = clean_text.strip()
+            
+            if len(clean_text) > 200: # Arbitrary threshold for "sufficient text"
+                logger.info(f"Text-First Strategy: Sufficient text found ({len(clean_text)} chars). Skipping upload.")
+                
+                if progress_callback:
+                    await progress_callback(30, "Analyzing extracted text...")
+                    
+                result = await self._analyze_text_only(text_content)
+                
+                # Basic validation: ensure we got something
+                if result.title or result.application_number or (result.inventors and len(result.inventors) > 0):
+                     logger.info(f"Text-First Analysis Successful. Latency: {(datetime.utcnow() - text_start).total_seconds()}s")
+                     return result
+                else:
+                    logger.warning("Text-First Analysis returned empty data. Falling back to Vision.")
+            else:
+                logger.info("Text-First Strategy: Insufficient text (likely scanned). Falling back to Vision.")
+
+        except Exception as e:
+            logger.warning(f"Text-First Strategy failed: {e}. Falling back to Vision.")
+
+        # FALLBACK: Vision / Native PDF (requires upload)
+        logger.info("Initiating file upload for Vision analysis...")
+        if progress_callback:
+             await progress_callback(40, "Uploading document for Vision analysis...")
+
+        upload_task = asyncio.create_task(self.upload_file(upload_source))
+        
+        # STRATEGY 2: Check for XFA Dynamic Form Data (Local CPU) - While uploading
+        try:
+            xfa_start = datetime.utcnow()
+            xfa_data = await self._extract_xfa_data(file_path, file_content)
+            logger.info(f"XFA Check took: {(datetime.utcnow() - xfa_start).total_seconds()}s")
+            
             if xfa_data:
                 logger.info("XFA Dynamic Form detected! Using direct XML extraction path.")
                 xfa_result = await self._analyze_xfa_xml(xfa_data)
                 
-                # Validation: Only accept XFA result if we actually found inventors
+                # Validation
                 if xfa_result.inventors and len(xfa_result.inventors) > 0:
-                     # Check for "ghost" inventors (all nulls) which sometimes happen with empty XFA
                      valid_inventors = [i for i in xfa_result.inventors if i.name or i.last_name]
                      if valid_inventors:
                          logger.info(f"Successfully extracted {len(valid_inventors)} inventors from XFA data.")
+                         # Cancel upload as it's not needed
+                         upload_task.cancel()
+                         try:
+                             await upload_task
+                         except asyncio.CancelledError:
+                             pass
                          xfa_result.inventors = valid_inventors
                          return xfa_result
-                     else:
-                         logger.warning("XFA extraction returned empty/invalid inventor records. Falling back to Vision strategy.")
-                else:
-                    logger.warning("XFA extraction returned NO inventors. Falling back to Vision strategy.")
-                    
         except Exception as e:
             logger.warning(f"XFA detection failed (continuing to vision fallback): {e}")
 
-        # STRATEGY 2: Hybrid Vision + Text (Page-by-Page)
-        logger.info("Using Hybrid Vision+Text strategy...")
-        
-        image_paths = await self._convert_pdf_to_images(file_path)
-        
-        if not image_paths:
-            logger.warning("PDF-to-Image conversion failed or returned empty. Falling back to direct PDF upload.")
-            return await self._analyze_pdf_direct_fallback(file_path)
+        # STRATEGY 2: Fast-Track (Native PDF) using pre-started upload
+        # Use ONLY for small documents (< 50 pages)
+        if page_count < 50:
+            logger.info("Document is small (< 50 pages). Using Native PDF Fast-Track strategy...")
+            
+            if progress_callback:
+                await progress_callback(20, "Analyzing full document (Fast-Track)...")
+                
+            try:
+                # Wait for upload to complete (if not already)
+                upload_start = datetime.utcnow()
+                file_obj = await upload_task
+                logger.info(f"File upload ready. Total upload wait: {(datetime.utcnow() - upload_start).total_seconds()}s")
+                
+                return await self._analyze_pdf_direct_fallback(file_path, file_obj=file_obj, file_content=file_content)
+            except Exception as e:
+                logger.warning(f"Native PDF extraction failed: {e}. Falling back to Hybrid Page-by-Page strategy.")
+        else:
+            logger.info(f"Document is large ({page_count} pages). Skipping Native PDF to use Hybrid Parallel strategy.")
 
-        extracted_inventors = []
-        final_metadata = {
-            "title": None,
-            "application_number": None,
-            "filing_date": None,
-            "entity_status": None,
-            "inventors": []
-        }
+        # STRATEGY 3: Unified Chunking Strategy (Vision) - Fallback
+        # This replaces the old "Page-by-Page Image" strategy with a robust "PDF Chunking" approach.
+        logger.info("Falling back to Unified Chunking Strategy (Vision)...")
+        
+        if progress_callback:
+            logger.info("Reporting progress: 20%")
+            await progress_callback(20, "Analyzing document chunks with Vision...")
 
         try:
-            # Open doc once for text extraction
-            doc = fitz.open(file_path) if fitz else None
-
-            # 2. Iterate through each page image
-            for page_idx, img_path in enumerate(image_paths):
-                logger.info(f"Processing Page {page_idx + 1} of {len(image_paths)}...")
-                
-                # Extract text for this page
-                page_text = ""
-                if doc and page_idx < len(doc):
-                    try:
-                        page_text = doc[page_idx].get_text()
-                    except Exception as e:
-                        logger.warning(f"Failed to extract text for page {page_idx}: {e}")
-
-                # Analyze single page with HYBRID input
-                page_result = await self._analyze_single_page_image(img_path, page_idx + 1, page_text)
-                
-                # Aggregate Metadata (Prioritize Page 1 for Title/App Number, but update if found later and currently empty)
-                if not final_metadata["title"] and page_result.get("title"):
-                    final_metadata["title"] = page_result["title"]
-                if not final_metadata["application_number"] and page_result.get("application_number"):
-                    final_metadata["application_number"] = page_result["application_number"]
-                if not final_metadata["entity_status"] and page_result.get("entity_status"):
-                    final_metadata["entity_status"] = page_result["entity_status"]
-                
-                # Aggregate Inventors (Append unique ones)
-                if page_result.get("inventors"):
-                    for new_inv in page_result["inventors"]:
-                        # Simple de-duplication based on name (if provided)
-                        if new_inv.get("name") and not any(existing.get("name") == new_inv.get("name") for existing in extracted_inventors):
-                            extracted_inventors.append(new_inv)
-                        # If no name but has details, append anyway (rare edge case)
-                        elif not new_inv.get("name") and (new_inv.get("first_name") or new_inv.get("last_name")):
-                             extracted_inventors.append(new_inv)
+            # We need raw bytes for chunking
+            if not file_content:
+                with open(file_path, "rb") as f:
+                    pdf_bytes = f.read()
+            else:
+                pdf_bytes = file_content
             
-            final_metadata["inventors"] = extracted_inventors
-            logger.info(f"Page-by-Page Extraction Complete. Found {len(extracted_inventors)} inventors.")
+            chunk_result = await self._analyze_document_chunked_structured(
+                file_bytes=pdf_bytes,
+                filename=os.path.basename(file_path),
+                total_pages=page_count,
+                progress_callback=progress_callback
+            )
+
+            # STRATEGY 4: Final Fallback - Direct PDF Upload
+            # If chunking found literally nothing (or failed), try one last desperate Direct Upload
+            # But only if the chunking result is basically empty
+            if not chunk_result.inventors and not chunk_result.title:
+                logger.warning("⚠️ Chunking found no metadata. Attempting Final Fallback: Direct PDF Upload...")
+                return await self._analyze_pdf_direct_fallback(file_path, file_content=file_content)
             
-            # STRATEGY 3: Final Fallback - Native PDF Direct Upload
-            # Check if we found any VALID inventors (names that are not empty)
-            valid_inventors_found = False
-            if extracted_inventors:
-                for inv in extracted_inventors:
-                    if (inv.get("name") and inv["name"].strip()) or (inv.get("last_name") and inv["last_name"].strip()):
-                        valid_inventors_found = True
-                        break
-            
-            if not valid_inventors_found:
-                logger.warning("⚠️ No VALID inventors found via Page-by-Page. Attempting Strategy 3: Local Form Field Extraction...")
-                
-                # STRATEGY 3: Local Form Field Extraction (pypdf)
-                # This bypasses rendering issues (like "Please upgrade Adobe Reader" pages) by reading form keys directly
-                form_data_text = await self._extract_text_locally(file_path)
-                if "--- FORM FIELD DATA ---" in form_data_text:
-                    logger.info("Found Form Field Data! Analyzing with LLM...")
-                    form_result = await self._analyze_form_text(form_data_text)
-                    
-                    # Validate Form Result
-                    if form_result.inventors and len(form_result.inventors) > 0:
-                        valid_form_invs = [i for i in form_result.inventors if i.name or i.last_name]
-                        if valid_form_invs:
-                            logger.info(f"Successfully extracted {len(valid_form_invs)} inventors from Form Data.")
-                            form_result.inventors = valid_form_invs
-                            return form_result
-
-                # STRATEGY 4: Final Fallback - Native PDF Direct Upload
-                logger.warning("⚠️ Form Field Extraction failed or found no data. Attempting Final Fallback: Direct PDF Upload...")
-                return await self._analyze_pdf_direct_fallback(file_path)
-
-            # Post-processing: Name splitting
-            for inventor in final_metadata["inventors"]:
-                if inventor.get("name") and not inventor.get("last_name"):
-                    parts = inventor["name"].split()
-                    if len(parts) >= 2:
-                        inventor["first_name"] = parts[0]
-                        inventor["last_name"] = parts[-1]
-                        if len(parts) > 2:
-                            inventor["middle_name"] = " ".join(parts[1:-1])
-                    elif len(parts) == 1:
-                        inventor["first_name"] = parts[0]
-
-            return PatentApplicationMetadata(**final_metadata)
+            return chunk_result
 
         except Exception as e:
-            logger.error(f"Page-by-Page analysis failed: {e}")
-            raise e
-        finally:
-             if doc:
-                 doc.close()
-             # Cleanup images
-             for path in image_paths:
-                 if os.path.exists(path):
-                     os.remove(path)
+            logger.error(f"Unified Chunking analysis failed: {e}")
+            # Final fallback if chunking crashes completely
+            return await self._analyze_pdf_direct_fallback(file_path, file_content=file_content)
 
-    async def _extract_xfa_data(self, file_path: str) -> Optional[str]:
+    async def _extract_xfa_data(self, file_path: str, file_content: Optional[bytes] = None) -> Optional[str]:
         """
         Checks if the PDF is an XFA form and extracts the internal XML data.
         """
         def _read_xfa():
             try:
-                reader = PdfReader(file_path)
+                if file_content:
+                    reader = PdfReader(io.BytesIO(file_content))
+                else:
+                    reader = PdfReader(file_path)
+                    
                 if "/AcroForm" in reader.trailer["/Root"]:
                     acroform = reader.trailer["/Root"]["/AcroForm"]
                     if "/XFA" in acroform:
@@ -537,6 +564,69 @@ class LLMService:
         
         return PatentApplicationMetadata(**result)
 
+    async def _analyze_text_only(self, text_content: str) -> PatentApplicationMetadata:
+        """
+        Analyzes raw text content to extract metadata.
+        Used for Text-First strategy to avoid file upload.
+        """
+        prompt = f"""
+        Analyze the provided Text Content from a Patent Application Data Sheet (ADS) or similar cover sheet.
+        Extract the patent metadata directly from the text.
+        
+        ## TEXT CONTENT
+        {text_content[:80000]} # Limit text to avoid context overflow
+        
+        ## INSTRUCTIONS
+        - **Title**: Look for "Title of Invention" or similar headers.
+        - **Application Number**: Look for "Application Number", "Control Number".
+        - **Entity Status**: Look for indicators like "Small Entity", "Micro Entity".
+        - **Inventors**:
+            - Look for sections labeled "Inventor Information", "Legal Name", etc.
+            - Extract Name, City, State, Country, and Full Mailing Address.
+            - Parse "Given Name", "Family Name" if they appear separately.
+        
+        ## OUTPUT SCHEMA
+        Return JSON with:
+        - _debug_reasoning (string)
+        - title
+        - application_number
+        - entity_status
+        - inventors (list of objects)
+        """
+        
+        schema = {
+            "_debug_reasoning": "Explain which text sections were used to find the data",
+            "title": "Title found (or null)",
+            "application_number": "Application number (or null)",
+            "entity_status": "Entity status (or null)",
+            "inventors": [
+                {
+                    "name": "Full Name",
+                    "first_name": "First name",
+                    "middle_name": "Middle name",
+                    "last_name": "Last name",
+                    "city": "City",
+                    "state": "State",
+                    "country": "Country",
+                    "street_address": "Street address",
+                    "full_address": "Full address string"
+                }
+            ]
+        }
+        
+        result = await self.generate_structured_content(prompt=prompt, schema=schema)
+        
+        # Post-processing for name splitting (same as other methods)
+        if result.get("inventors"):
+            for inventor in result["inventors"]:
+                if inventor.get("name") and not inventor.get("last_name"):
+                    parts = inventor["name"].split()
+                    if len(parts) >= 2:
+                        inventor["first_name"] = parts[0]
+                        inventor["last_name"] = parts[-1]
+                        
+        return PatentApplicationMetadata(**result)
+
     async def _analyze_single_page_image(self, img_path: str, page_num: int, page_text: str = "") -> Dict[str, Any]:
         """
         Analyzes a single page image AND its text content to extract partial metadata.
@@ -607,16 +697,19 @@ class LLMService:
             logger.warning(f"Failed to analyze page {page_num}: {e}")
             return {}
 
-    async def _analyze_pdf_direct_fallback(self, file_path: str) -> PatentApplicationMetadata:
+    async def _analyze_pdf_direct_fallback(self, file_path: str, file_obj: Any = None, file_content: Optional[bytes] = None) -> PatentApplicationMetadata:
         """
-        Original single-pass logic preserved as fallback.
+        Single-pass native PDF extraction.
+        Accepts optional pre-uploaded file_obj to save time.
         """
-        # Upload file to Gemini once
-        try:
-            file_obj = await self.upload_file(file_path)
-        except Exception as e:
-            logger.error(f"Failed to upload file for analysis: {e}")
-            raise e
+        # Upload file to Gemini if not provided
+        if not file_obj:
+            try:
+                upload_source = io.BytesIO(file_content) if file_content else file_path
+                file_obj = await self.upload_file(upload_source)
+            except Exception as e:
+                logger.error(f"Failed to upload file for analysis: {e}")
+                raise e
 
         # Construct prompt for direct visual extraction
         prompt = """
@@ -702,7 +795,7 @@ class LLMService:
             logger.error(f"Error analyzing cover sheet: {e}")
             raise e
 
-    async def _convert_pdf_to_images(self, file_path: str) -> List[str]:
+    async def _convert_pdf_to_images(self, file_path: str, file_content: Optional[bytes] = None) -> List[str]:
         """
         Converts PDF pages to JPEG images using PyMuPDF (fitz).
         Returns a list of temporary file paths.
@@ -714,13 +807,21 @@ class LLMService:
         def _convert():
             image_paths = []
             try:
-                doc = fitz.open(file_path)
-                # Process up to first 5 pages to avoid overload
-                for i in range(min(5, len(doc))):
+                if file_content:
+                    doc = fitz.open(stream=file_content, filetype="pdf")
+                    # If we don't have a real path, create a safe base prefix
+                    base_path = file_path if file_path and os.path.exists(file_path) else f"temp_pdf_{datetime.utcnow().timestamp()}"
+                else:
+                    doc = fitz.open(file_path)
+                    base_path = file_path
+
+                # Process all pages (or up to a reasonable sanity limit like 50)
+                # Requirement implies support for 50 page PDFs
+                for i in range(min(50, len(doc))):
                     page = doc.load_page(i)
                     # Increase DPI to 300 for high-quality OCR on bad scans
                     pix = page.get_pixmap(dpi=300)
-                    img_path = f"{file_path}_page_{i}.jpg"
+                    img_path = f"{base_path}_page_{i}.jpg"
                     pix.save(img_path)
                     image_paths.append(img_path)
                 doc.close()
@@ -730,7 +831,7 @@ class LLMService:
 
         return await asyncio.to_thread(_convert)
 
-    async def _extract_text_locally(self, file_path: str) -> str:
+    async def _extract_text_locally(self, file_path: str, file_content: Optional[bytes] = None) -> str:
         """
         Extracts text from a PDF using pypdf locally.
         Crucially, this extracts FORM FIELDS from editable PDFs.
@@ -738,7 +839,10 @@ class LLMService:
         def _read_pdf():
             text_content = []
             try:
-                reader = PdfReader(file_path)
+                if file_content:
+                    reader = PdfReader(io.BytesIO(file_content))
+                else:
+                    reader = PdfReader(file_path)
                 
                 # --- DIAGNOSTICS ---
                 if reader.is_encrypted:
@@ -918,6 +1022,205 @@ class LLMService:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         return self._aggregate_chunk_results(results, total_chunks, len(file_bytes))
+
+    async def _analyze_document_chunked_structured(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        total_pages: int,
+        progress_callback: Optional[Callable[[int, str], Awaitable[None]]] = None
+    ) -> PatentApplicationMetadata:
+        """
+        Analyzes a large document by splitting it into chunks and processing them in parallel
+        to extract STRUCTURED metadata (Inventors, Title, etc.).
+        """
+        # 1. Split into chunks
+        # Use a slightly larger chunk size for structured data to ensure context (e.g. 10 pages)
+        chunk_size = 10
+        chunks = self._chunk_pdf(file_bytes, chunk_size_pages=chunk_size)
+        total_chunks = len(chunks)
+        
+        logger.info(f"Splitting {total_pages} pages into {total_chunks} chunks for Structured Analysis.")
+
+        # 2. Parallel Processing
+        semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_EXTRACTIONS)
+        processed_count = 0
+
+        async def process_chunk(chunk_data: Tuple[bytes, int, int], chunk_index: int):
+            nonlocal processed_count
+            chunk_bytes, start_page, end_page = chunk_data
+            
+            async with semaphore:
+                logger.info(f"Starting Structured Analysis for Chunk {chunk_index + 1}/{total_chunks} (Pages {start_page}-{end_page})")
+                try:
+                    result = await self._extract_structured_chunk(
+                        chunk_bytes, chunk_index, total_chunks, start_page, end_page
+                    )
+                    
+                    processed_count += 1
+                    if progress_callback:
+                        # Map progress 20-90%
+                        progress = 20 + int((processed_count / total_chunks) * 70)
+                        await progress_callback(progress, f"Analyzed chunk {processed_count}/{total_chunks}")
+                    
+                    return result
+                except Exception as e:
+                    logger.error(f"Failed to analyze chunk {chunk_index}: {e}")
+                    return None
+
+        tasks = [process_chunk(c, i) for i, c in enumerate(chunks)]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 3. Aggregate Results
+        # Filter out failed chunks
+        valid_results = [r for r in results if r is not None and not isinstance(r, Exception)]
+        
+        return self._aggregate_structured_chunks(valid_results)
+
+    async def _extract_structured_chunk(
+        self, chunk_bytes: bytes, chunk_index: int, total_chunks: int,
+        start_page: int, end_page: int, max_retries: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Extract structured metadata from a single PDF chunk.
+        """
+        chunk_prompt = f"""
+        You are DocuMind. You are processing CHUNK {chunk_index+1} of {total_chunks} from a larger patent document.
+        This chunk contains pages {start_page} to {end_page}.
+
+        ## INSTRUCTIONS
+        1. **Inventors (CRITICAL)**:
+           - Scan EVERY PAGE in this chunk for "Inventor Information", "Legal Name", or similar tables.
+           - Extract ALL inventors found.
+           - If a list of inventors continues from a previous page, INCLUDE THEM.
+        2. **Bibliographic Data**:
+           - Look for Title, Application Number, Filing Date, Entity Status.
+           - Note: These might only appear on the first page of the first chunk, but check anyway.
+
+        ## OUTPUT SCHEMA
+        Return JSON with:
+        - title (string/null)
+        - application_number (string/null)
+        - entity_status (string/null)
+        - inventors (list of objects)
+        """
+        
+        schema = {
+            "title": "Title found (or null)",
+            "application_number": "Application number (or null)",
+            "entity_status": "Entity status (or null)",
+            "inventors": [
+                {
+                    "name": "Full Name",
+                    "first_name": "First name",
+                    "middle_name": "Middle name",
+                    "last_name": "Last name",
+                    "city": "City",
+                    "state": "State",
+                    "country": "Country",
+                    "street_address": "Street address / Mailing address"
+                }
+            ]
+        }
+
+        for attempt in range(max_retries):
+            try:
+                # Write chunk to temp file for upload
+                temp_filename = f"temp_struct_chunk_{chunk_index}_{attempt}_{random.randint(1000,9999)}.pdf"
+                with open(temp_filename, "wb") as f:
+                    f.write(chunk_bytes)
+                
+                try:
+                    file_obj = await self.upload_file(temp_filename)
+                    
+                    result = await self.generate_structured_content(
+                        prompt=chunk_prompt,
+                        file_obj=file_obj,
+                        schema=schema
+                    )
+                    return result
+
+                finally:
+                    if os.path.exists(temp_filename):
+                        try:
+                            os.remove(temp_filename)
+                        except:
+                            pass
+
+            except Exception as e:
+                logger.warning(f"Chunk {chunk_index} failed attempt {attempt+1}: {e}")
+                wait_time = (2 ** attempt) * 2
+                await asyncio.sleep(wait_time)
+
+        return {}
+
+    def _aggregate_structured_chunks(self, results: List[Dict[str, Any]]) -> PatentApplicationMetadata:
+        """
+        Aggregates metadata from multiple chunks into a single result.
+        """
+        final_metadata = {
+            "title": None,
+            "application_number": None,
+            "entity_status": None,
+            "inventors": []
+        }
+        
+        extracted_inventors = []
+        
+        for res in results:
+            if not res: continue
+            
+            # 1. Metadata (First valid wins)
+            if not final_metadata["title"] and res.get("title"):
+                final_metadata["title"] = res["title"]
+            if not final_metadata["application_number"] and res.get("application_number"):
+                final_metadata["application_number"] = res["application_number"]
+            if not final_metadata["entity_status"] and res.get("entity_status"):
+                final_metadata["entity_status"] = res["entity_status"]
+            
+            # 2. Inventors (Merge and Deduplicate)
+            if res.get("inventors"):
+                for new_inv in res["inventors"]:
+                    # Basic deduplication by Name
+                    is_duplicate = False
+                    new_name = new_inv.get("name", "").strip().lower()
+                    
+                    if not new_name and (new_inv.get("first_name") or new_inv.get("last_name")):
+                         # Construct name if missing
+                         parts = [p for p in [new_inv.get("first_name"), new_inv.get("middle_name"), new_inv.get("last_name")] if p]
+                         new_name = " ".join(parts).strip().lower()
+
+                    for existing in extracted_inventors:
+                        existing_name = existing.get("name", "").strip().lower()
+                        if not existing_name:
+                             parts = [p for p in [existing.get("first_name"), existing.get("middle_name"), existing.get("last_name")] if p]
+                             existing_name = " ".join(parts).strip().lower()
+                        
+                        if new_name and existing_name and new_name == existing_name:
+                            is_duplicate = True
+                            # Merge fields if existing is empty but new has data
+                            if not existing.get("city") and new_inv.get("city"):
+                                existing["city"] = new_inv["city"]
+                            break
+                    
+                    if not is_duplicate:
+                        extracted_inventors.append(new_inv)
+        
+        final_metadata["inventors"] = extracted_inventors
+        
+        # Post-processing: Name splitting
+        for inventor in final_metadata["inventors"]:
+            if inventor.get("name") and not inventor.get("last_name"):
+                parts = inventor["name"].split()
+                if len(parts) >= 2:
+                    inventor["first_name"] = parts[0]
+                    inventor["last_name"] = parts[-1]
+                    if len(parts) > 2:
+                        inventor["middle_name"] = " ".join(parts[1:-1])
+                elif len(parts) == 1:
+                    inventor["first_name"] = parts[0]
+
+        return PatentApplicationMetadata(**final_metadata)
 
     def _chunk_pdf(self, pdf_bytes: bytes, chunk_size_pages: int = 5) -> List[Tuple[bytes, int, int]]:
         """

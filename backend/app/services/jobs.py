@@ -85,25 +85,37 @@ class JobService:
         job = await db.processing_jobs.find_one({"_id": ObjectId(job_id)})
         user_id = str(job["user_id"]) if job else "system"
         
-        temp_file_path = f"temp_{uuid.uuid4()}.pdf"
-        
         try:
             # 1. Update Job Status to PROCESSING
+            logger.info(f"Setting Job {job_id} to PROCESSING (10%)")
             await self.update_job_status(job_id, JobStatus.PROCESSING, progress=10)
             await db.documents.update_one(
                 {"_id": ObjectId(document_id)},
                 {"$set": {"processed_status": ProcessedStatus.PROCESSING}}
             )
             
-            # 2. Download file from Storage
-            logger.info(f"Downloading file {storage_key} to {temp_file_path}")
-            storage_service.download_to_filename(storage_key, temp_file_path)
+            # 2. Download file from Storage (To Memory)
+            logger.info(f"Downloading file {storage_key} to memory...")
+            file_bytes = storage_service.download_as_bytes(storage_key)
+            logger.info(f"Download complete ({len(file_bytes)} bytes). Setting progress to 30%")
+            
             await self.update_job_status(job_id, JobStatus.PROCESSING, progress=30)
             
             # 3. Perform Extraction
             logger.info("Calling LLM Service...")
             start_time = datetime.utcnow()
-            metadata = await llm_service.analyze_cover_sheet(temp_file_path)
+            
+            # Define progress callback
+            async def report_progress(progress: int, message: str):
+                await self.update_job_status(job_id, JobStatus.PROCESSING, progress=progress)
+                logger.info(f"Job {job_id} progress: {progress}% - {message}")
+
+            # Pass downloaded bytes directly to analyze_cover_sheet to avoid disk I/O
+            metadata = await llm_service.analyze_cover_sheet(
+                file_path=storage_key,
+                file_content=file_bytes,
+                progress_callback=report_progress
+            )
             end_time = datetime.utcnow()
             duration_ms = (end_time - start_time).total_seconds() * 1000
             
@@ -146,8 +158,6 @@ class JobService:
                 {"$set": {"processed_status": ProcessedStatus.FAILED}}
             )
         finally:
-            # Cleanup
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+            pass
 
 job_service = JobService()

@@ -2,6 +2,11 @@ from pydantic_settings import BaseSettings
 from typing import Optional, List
 import os
 
+# Explicitly define path to .env file in backend directory
+# Current file is in backend/app/core/, so we need to go up 3 levels to backend/
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ENV_PATH = os.path.join(BACKEND_DIR, ".env")
+
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "JWHD IP Automation"
@@ -46,17 +51,17 @@ class Settings(BaseSettings):
     GEMINI_MAX_RETRIES: int = 3
 
     # Extraction Configuration
-    CHUNK_SIZE_PAGES: int = 50  # Increased to utilize large context window
-    LARGE_FILE_THRESHOLD_MB: float = 20.0  # Increased to avoid unnecessary chunking
+    CHUNK_SIZE_PAGES: int = 5  # Aligned with Technical Guide
+    LARGE_FILE_THRESHOLD_MB: float = 5.0  # Aligned with Technical Guide
     LARGE_FILE_PAGE_THRESHOLD: int = 50
-    MAX_CONCURRENT_EXTRACTIONS: int = 2  # Reduced to avoid rate limits
+    MAX_CONCURRENT_EXTRACTIONS: int = 5  # Optimal for stability/rate-limits
 
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
 
     class Config:
-        env_file = ".env"
+        env_file = ENV_PATH
         case_sensitive = True
         extra = "ignore"
 
