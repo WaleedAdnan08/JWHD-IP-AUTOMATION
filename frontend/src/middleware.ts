@@ -27,6 +27,11 @@ export function middleware(request: NextRequest) {
   const publicRoutes = ['/login', '/register', '/'];
   const isPublicRoute = publicRoutes.some(path => request.nextUrl.pathname === path);
 
+  // Explicitly redirect root to login
+  if (request.nextUrl.pathname === '/') {
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
   // If trying to access a protected route without a token
   if (isProtectedRoute && !token) {
     // Redirect to login page

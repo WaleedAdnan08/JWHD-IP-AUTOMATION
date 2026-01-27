@@ -38,8 +38,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const initAuth = async () => {
       console.log('AuthContext: Initializing...');
-      const token = localStorage.getItem('token');
-      const storedUser = localStorage.getItem('user');
+      let token: string | null = null;
+      let storedUser: string | null = null;
+
+      try {
+        token = localStorage.getItem('token');
+        storedUser = localStorage.getItem('user');
+      } catch (e) {
+        console.warn('AuthContext: localStorage is unavailable or restricted', e);
+        // We can continue to check cookies even if localStorage fails
+      }
 
       if (token && storedUser) {
         console.log('AuthContext: Found token and user in localStorage');
@@ -52,8 +60,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         console.log('AuthContext: No complete session in localStorage, checking cookies...');
         // Fallback: Check for cookie-based session if local storage is empty
-        // This handles cases where middleware passes the user through (valid cookie)
-        // but local storage is empty/cleared
         const cookies = document.cookie.split(';').reduce((acc, cookie) => {
           const parts = cookie.trim().split('=');
           if (parts.length >= 2) {
@@ -75,9 +81,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             console.log('AuthContext: Session restored successfully', response.data);
             
-            // Re-sync local storage
-            localStorage.setItem('token', cookies.token);
-            localStorage.setItem('user', JSON.stringify(response.data));
+            // Re-sync local storage safely
+            try {
+              localStorage.setItem('token', cookies.token);
+              localStorage.setItem('user', JSON.stringify(response.data));
+            } catch (e) {
+              console.warn("AuthContext: Failed to sync to localStorage", e);
+            }
+            
             setUser(response.data);
           } catch (error) {
             console.error("AuthContext: Failed to restore session from cookie", error);
@@ -95,8 +106,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = (token: string, userData: User) => {
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(userData));
+    try {
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(userData));
+    } catch (e) {
+      console.error("AuthContext: Failed to save session to localStorage", e);
+      alert("Warning: Local storage is disabled. You may need to log in again if you refresh the page.");
+    }
+    
     // Set cookie for middleware access (expires in 7 days to match refresh token potential)
     document.cookie = `token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
     setUser(userData);
@@ -110,8 +127,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error("Logout API call failed", error);
     }
 
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    try {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+    } catch (e) {
+      console.warn("AuthContext: Failed to clear localStorage", e);
+    }
     
     // Remove cookie with various path/domain options to be safe
     document.cookie = 'token=; path=/; max-age=0';

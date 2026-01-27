@@ -16,11 +16,13 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    if (!loading && isAuthenticated) {
-      router.push('/dashboard');
-    }
-  }, [loading, isAuthenticated, router]);
+  // Removed auto-redirect to allow users to see the login page explicitly
+  // even if a session exists (preventing mid-typing redirects).
+  // useEffect(() => {
+  //   if (!loading && isAuthenticated) {
+  //     router.push('/dashboard');
+  //   }
+  // }, [loading, isAuthenticated, router]);
 
   const onSubmit = async (data: any) => {
     setIsLoading(true);

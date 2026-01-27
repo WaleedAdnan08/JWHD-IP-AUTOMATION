@@ -10,7 +10,16 @@ const api = axios.create({
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('token');
+      let token = localStorage.getItem('token');
+      
+      // Fallback: Try to get token from cookies if not in localStorage
+      if (!token) {
+        const match = document.cookie.match(new RegExp('(^| )token=([^;]+)'));
+        if (match) {
+          token = match[2];
+        }
+      }
+
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -18,6 +27,15 @@ api.interceptors.request.use(
     return config;
   },
   (error: AxiosError) => {
+    // Global 401 handler
+    if (error.response && error.response.status === 401) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        document.cookie = 'token=; path=/; max-age=0';
+        window.location.href = '/login';
+      }
+    }
     return Promise.reject(error);
   }
 );
