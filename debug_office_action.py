@@ -5,7 +5,10 @@ from bson import ObjectId
 
 async def debug_documents():
     # Connect to MongoDB
-    mongo_uri = os.getenv("MONGODB_URL", "mongodb+srv://WaleedAdnan:cricketislife@cluster0.8l71z.mongodb.net/?appName=Cluster0")
+    mongo_uri = os.getenv("MONGODB_URL")
+    if not mongo_uri:
+        print("Error: MONGODB_URL environment variable not set.")
+        return
     client = MongoClient(mongo_uri)
     db = client["jwhd_ip_automation"]
     
