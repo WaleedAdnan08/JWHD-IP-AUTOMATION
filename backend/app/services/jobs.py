@@ -73,6 +73,7 @@ class JobService:
     async def process_document_extraction(self, job_id: str, document_id: str, storage_key: str):
         """
         Background task to process document extraction.
+        Handles both ADS Extraction and Office Action Analysis based on job type.
         """
         # Delayed imports to avoid circular dependencies
         from app.services.storage import storage_service
@@ -86,7 +87,8 @@ class JobService:
         # Get user_id for logging (could be passed in, or fetched from job)
         job = await db.processing_jobs.find_one({"_id": ObjectId(job_id)})
         user_id = str(job["user_id"]) if job else "system"
-        
+        job_type = job.get("job_type", JobType.ADS_EXTRACTION)
+
         job_start_time = time.time()
         
         try:
@@ -114,12 +116,26 @@ class JobService:
                 await self.update_job_status(job_id, JobStatus.PROCESSING, progress=progress)
                 logger.info(f"Job {job_id} progress: {progress}% - {message}")
 
-            # Pass downloaded bytes directly to analyze_cover_sheet to avoid disk I/O
-            metadata = await llm_service.analyze_cover_sheet(
-                file_path=storage_key,
-                file_content=file_bytes,
-                progress_callback=report_progress
-            )
+            # Pass downloaded bytes directly to analyze_cover_sheet/office_action to avoid disk I/O
+            if job_type == JobType.OFFICE_ACTION_ANALYSIS:
+                logger.info(f"Executing Office Action Analysis for Job {job_id}")
+                extraction_result = await llm_service.analyze_office_action(
+                    file_path=storage_key,
+                    file_content=file_bytes,
+                    progress_callback=report_progress
+                )
+                # Convert dict to model if needed, but llm_service returns dict for OA
+                # We need to ensure it's JSON serializable for MongoDB
+                metadata_dump = extraction_result
+            else:
+                logger.info(f"Executing ADS Extraction for Job {job_id}")
+                metadata = await llm_service.analyze_cover_sheet(
+                    file_path=storage_key,
+                    file_content=file_bytes,
+                    progress_callback=report_progress
+                )
+                metadata_dump = metadata.model_dump(by_alias=True)
+
             end_time = datetime.utcnow()
             duration_ms = (end_time - start_time).total_seconds() * 1000
             
@@ -130,6 +146,7 @@ class JobService:
                 details={
                     "job_id": job_id,
                     "document_id": document_id,
+                    "job_type": job_type,
                     "duration_ms": duration_ms,
                     "model": settings.GEMINI_MODEL
                 }
@@ -145,7 +162,7 @@ class JobService:
                 {
                     "$set": {
                         "processed_status": ProcessedStatus.COMPLETED,
-                        "extraction_data": metadata.model_dump(by_alias=True)
+                        "extraction_data": metadata_dump
                     }
                 }
             )

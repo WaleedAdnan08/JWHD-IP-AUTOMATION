@@ -8,6 +8,7 @@ class JobType(str, Enum):
     ADS_EXTRACTION = "ads_extraction"
     OFFICE_ACTION_PARSING = "office_action_parsing"
     VALIDATION = "validation"
+    OFFICE_ACTION_ANALYSIS = "office_action_analysis"
 
 class JobStatus(str, Enum):
     PENDING = "pending"

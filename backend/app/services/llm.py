@@ -1431,5 +1431,150 @@ class LLMService:
     #         metadata["has_handwriting"] = True
 
     #     return metadata
+    async def analyze_office_action(
+        self,
+        file_path: str,
+        file_content: Optional[bytes] = None,
+        progress_callback: Optional[Callable[[int, str], Awaitable[None]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyzes a Patent Office Action PDF.
+        Extracts structured data: Header, Claims Status, Rejections, Objections, etc.
+        """
+        from app.models.office_action import OfficeActionExtractedData
+        
+        logger.info(f"--- ANALYZING OFFICE ACTION: {file_path} ---")
+
+        # Upload file for multimodal analysis
+        if file_content:
+            upload_source = io.BytesIO(file_content)
+        else:
+            upload_source = file_path
+            
+        try:
+            if progress_callback:
+                await progress_callback(10, "Uploading Office Action for AI Analysis...")
+                
+            file_obj = await self.upload_file(upload_source)
+            
+            prompt = """
+            Analyze the provided Patent Office Action PDF.
+            Extract structured information with high precision.
+            
+            ## INSTRUCTIONS
+            
+            1. **HEADER INFO**: Extract Application Number, Filing Date, Office Action Date (Mailing Date), Examiner Name, Art Unit.
+            2. **CLAIMS STATUS**:
+               - List ALL claims mentioned.
+               - Determine status for each: Rejected, Allowed, Objected to, Cancelled, Withdrawn.
+               - Note if claims are Independent or Dependent.
+            3. **REJECTIONS (Critical)**:
+               - Extract EACH rejection block.
+               - Identify the statutory basis (e.g., 35 U.S.C. 102, 103, 112).
+               - List affected claim numbers.
+               - Extract the Examiner's Reasoning verbatim or typically summarized.
+               - List cited Prior Art (US Patents, Foreign Patents, NPL).
+            4. **OBJECTIONS**:
+               - Identify objections to Specification, Drawings, or Claims.
+               - Extract the reason and required correction.
+            5. **OTHER**:
+               - Look for "Allowable Subject Matter" indications.
+               - Response Deadline.
+
+            ## OUTPUT SCHEMA
+            Return JSON matching the following structure:
+            {
+                "header": {
+                    "application_number": "...",
+                    "office_action_date": "...",
+                    "office_action_type": "...",
+                    "examiner_name": "...",
+                    "art_unit": "...",
+                    "response_deadline": "..."
+                },
+                "claims_status": [
+                    { "claim_number": "1", "status": "Rejected", "dependency_type": "Independent" },
+                    ...
+                ],
+                "rejections": [
+                    {
+                        "rejection_type": "103",
+                        "statutory_basis": "35 U.S.C. 103",
+                        "affected_claims": ["1", "2"],
+                        "examiner_reasoning": "...",
+                        "cited_prior_art": [
+                            { "reference_type": "US Patent", "identifier": "US 9,999,999 B2", "relevant_claims": ["1"] }
+                        ]
+                    }
+                ],
+                "objections": [...],
+                "other_statements": [...]
+            }
+            """
+            
+            schema = {
+                "header": {
+                    "application_number": "string",
+                    "filing_date": "string (optional)",
+                    "office_action_date": "string",
+                    "office_action_type": "string",
+                    "examiner_name": "string (optional)",
+                    "art_unit": "string (optional)",
+                    "response_deadline": "string (optional)"
+                },
+                "claims_status": [
+                    {
+                        "claim_number": "string",
+                        "status": "string",
+                        "dependency_type": "string"
+                    }
+                ],
+                "rejections": [
+                    {
+                        "rejection_type": "string",
+                        "statutory_basis": "string (optional)",
+                        "affected_claims": ["string"],
+                        "examiner_reasoning": "string",
+                        "cited_prior_art": [
+                            {
+                                "reference_type": "string",
+                                "identifier": "string",
+                                "relevant_claims": ["string"]
+                            }
+                        ]
+                    }
+                ],
+                "objections": [
+                    {
+                        "objected_item": "string",
+                        "reason": "string",
+                        "corrective_action": "string (optional)"
+                    }
+                ],
+                "other_statements": [
+                    {
+                        "statement_type": "string",
+                        "content": "string"
+                    }
+                ]
+            }
+
+            if progress_callback:
+                await progress_callback(30, "AI Analyzing Document Structure...")
+
+            result = await self.generate_structured_content(
+                prompt=prompt,
+                file_obj=file_obj,
+                schema=schema
+            )
+            
+            if progress_callback:
+                await progress_callback(90, "Finalizing Extraction...")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Office Action Analysis Failed: {e}")
+            raise e
 
 llm_service = LLMService()

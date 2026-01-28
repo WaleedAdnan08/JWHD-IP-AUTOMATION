@@ -31,6 +31,18 @@ export default function DashboardPage() {
             </Button>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Analyze Office Action</CardTitle>
+            <CardDescription>Extract and Analyze Office Actions</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button className="w-full" asChild>
+              <Link href="/dashboard/office-action">Start New Analysis</Link>
+            </Button>
+          </CardContent>
+        </Card>
         
         <Card>
           <CardHeader>
