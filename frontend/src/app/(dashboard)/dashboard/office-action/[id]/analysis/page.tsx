@@ -8,20 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-
-interface JobStatus {
-    status: string;
-    progress_percentage: number;
-    error_details?: string;
-}
-
-interface OfficeActionData {
-    header: any;
-    claims_status: any[];
-    rejections: any[];
-    objections: any[];
-    other_statements: any[];
-}
+import { OfficeActionData, JobStatus } from '@/lib/types';
 
 export default function AnalysisPage() {
     const params = useParams();
@@ -149,23 +136,116 @@ export default function AnalysisPage() {
                     <CardContent className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="text-sm font-medium">Application Number</label>
-                            <Input 
-                                value={data.header.application_number} 
+                            <Input
+                                value={data.header.application_number || ''}
                                 onChange={(e) => setData({...data, header: {...data.header, application_number: e.target.value}})}
                             />
                         </div>
                         <div>
+                            <label className="text-sm font-medium">Filing Date</label>
+                            <Input
+                                value={data.header.filing_date || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, filing_date: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">First Named Inventor</label>
+                            <Input
+                                value={data.header.first_named_inventor || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, first_named_inventor: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Attorney Docket Number</label>
+                            <Input
+                                value={data.header.attorney_docket_number || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, attorney_docket_number: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Confirmation Number</label>
+                            <Input
+                                value={data.header.confirmation_number || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, confirmation_number: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Applicant Name/Entity</label>
+                            <Input
+                                value={data.header.applicant_name || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, applicant_name: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Title of Invention</label>
+                            <Input
+                                value={data.header.title_of_invention || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, title_of_invention: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Customer Number</label>
+                            <Input
+                                value={data.header.customer_number || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, customer_number: e.target.value}})}
+                            />
+                        </div>
+                        <div>
                             <label className="text-sm font-medium">Mailing Date</label>
-                            <Input 
-                                value={data.header.office_action_date} 
+                            <Input
+                                value={data.header.office_action_date || ''}
                                 onChange={(e) => setData({...data, header: {...data.header, office_action_date: e.target.value}})}
                             />
                         </div>
-                         <div>
+                        <div>
                             <label className="text-sm font-medium">Response Deadline</label>
-                            <Input 
-                                value={data.header.response_deadline} 
+                            <Input
+                                value={data.header.response_deadline || ''}
                                 onChange={(e) => setData({...data, header: {...data.header, response_deadline: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Examiner Name</label>
+                            <Input
+                                value={data.header.examiner_name || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, examiner_name: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Examiner Type</label>
+                            <Input
+                                value={data.header.examiner_type || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, examiner_type: e.target.value}})}
+                                placeholder="Primary Examiner or Assistant Examiner"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Examiner Phone Number</label>
+                            <Input
+                                value={data.header.examiner_phone || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, examiner_phone: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Examiner Email</label>
+                            <Input
+                                value={data.header.examiner_email || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, examiner_email: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Art Unit</label>
+                            <Input
+                                value={data.header.art_unit || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, art_unit: e.target.value}})}
+                            />
+                        </div>
+                        <div>
+                            <label className="text-sm font-medium">Office Action Type</label>
+                            <Input
+                                value={data.header.office_action_type || ''}
+                                onChange={(e) => setData({...data, header: {...data.header, office_action_type: e.target.value}})}
+                                placeholder="e.g., Non-Final, Final"
                             />
                         </div>
                     </CardContent>
@@ -184,9 +264,9 @@ export default function AnalysisPage() {
                                 <div className="space-y-2">
                                     <div>
                                         <label className="text-sm font-medium">Examiner Reasoning</label>
-                                        <Textarea 
-                                            value={rej.examiner_reasoning} 
-                                            onChange={(e) => {
+                                        <Textarea
+                                            value={rej.examiner_reasoning}
+                                            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
                                                 const newRejections = [...data.rejections];
                                                 newRejections[idx].examiner_reasoning = e.target.value;
                                                 setData({...data, rejections: newRejections});
@@ -213,25 +293,25 @@ export default function AnalysisPage() {
                         </div>
                         {data.claims_status.map((claim, idx) => (
                             <div key={idx} className="grid grid-cols-3 gap-2 mb-2 items-center">
-                                <Input 
-                                    value={claim.claim_number}
-                                    onChange={(e) => {
+                                <Input
+                                    value={claim.claim_number || ''}
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                                          const newClaims = [...data.claims_status];
                                          newClaims[idx].claim_number = e.target.value;
                                          setData({...data, claims_status: newClaims});
                                     }}
                                 />
-                                <Input 
-                                    value={claim.status}
-                                    onChange={(e) => {
+                                <Input
+                                    value={claim.status || ''}
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                                          const newClaims = [...data.claims_status];
                                          newClaims[idx].status = e.target.value;
                                          setData({...data, claims_status: newClaims});
                                     }}
                                 />
-                                <Input 
-                                    value={claim.dependency_type}
-                                    onChange={(e) => {
+                                <Input
+                                    value={claim.dependency_type || ''}
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                                          const newClaims = [...data.claims_status];
                                          newClaims[idx].dependency_type = e.target.value;
                                          setData({...data, claims_status: newClaims});

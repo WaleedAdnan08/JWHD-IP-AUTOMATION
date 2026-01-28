@@ -1463,7 +1463,15 @@ class LLMService:
             
             ## INSTRUCTIONS
             
-            1. **HEADER INFO**: Extract Application Number, Filing Date, Office Action Date (Mailing Date), Examiner Name, Art Unit.
+            1. **HEADER INFO**: Extract comprehensive header information including:
+               - Application Number, Filing Date, Office Action Date (Mailing Date)
+               - Examiner Name, Art Unit, Attorney Docket Number, Confirmation Number
+               - First Named Inventor (usually visible in header or first page)
+               - Applicant Name/Entity (company or individual applicant)
+               - Title of Invention (usually on first page)
+               - Customer Number (for correspondence)
+               - Examiner's Phone Number and Email (if available)
+               - Examiner designation (Primary Examiner vs Assistant Examiner)
             2. **CLAIMS STATUS**:
                - List ALL claims mentioned.
                - Determine status for each: Rejected, Allowed, Objected to, Cancelled, Withdrawn.
@@ -1486,11 +1494,21 @@ class LLMService:
             {
                 "header": {
                     "application_number": "...",
+                    "filing_date": "...",
                     "office_action_date": "...",
                     "office_action_type": "...",
                     "examiner_name": "...",
                     "art_unit": "...",
-                    "response_deadline": "..."
+                    "attorney_docket_number": "...",
+                    "confirmation_number": "...",
+                    "response_deadline": "...",
+                    "first_named_inventor": "...",
+                    "applicant_name": "...",
+                    "title_of_invention": "...",
+                    "customer_number": "...",
+                    "examiner_phone": "...",
+                    "examiner_email": "...",
+                    "examiner_type": "..."
                 },
                 "claims_status": [
                     { "claim_number": "1", "status": "Rejected", "dependency_type": "Independent" },
@@ -1520,7 +1538,16 @@ class LLMService:
                     "office_action_type": "string",
                     "examiner_name": "string (optional)",
                     "art_unit": "string (optional)",
-                    "response_deadline": "string (optional)"
+                    "attorney_docket_number": "string (optional)",
+                    "confirmation_number": "string (optional)",
+                    "response_deadline": "string (optional)",
+                    "first_named_inventor": "string (optional)",
+                    "applicant_name": "string (optional)",
+                    "title_of_invention": "string (optional)",
+                    "customer_number": "string (optional)",
+                    "examiner_phone": "string (optional)",
+                    "examiner_email": "string (optional)",
+                    "examiner_type": "string (optional, e.g., 'Primary Examiner' or 'Assistant Examiner')"
                 },
                 "claims_status": [
                     {

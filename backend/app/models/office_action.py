@@ -47,6 +47,14 @@ class OfficeActionHeader(BaseModel):
     attorney_docket_number: Optional[str] = None
     confirmation_number: Optional[str] = None
     response_deadline: Optional[str] = None
+    # New fields for enhanced extraction
+    first_named_inventor: Optional[str] = None
+    applicant_name: Optional[str] = None
+    title_of_invention: Optional[str] = None
+    customer_number: Optional[str] = None
+    examiner_phone: Optional[str] = None
+    examiner_email: Optional[str] = None
+    examiner_type: Optional[str] = None # "Primary Examiner" or "Assistant Examiner"
 
 class OfficeActionExtractedData(MongoBaseModel):
     header: OfficeActionHeader

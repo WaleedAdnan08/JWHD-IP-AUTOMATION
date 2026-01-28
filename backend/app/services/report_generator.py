@@ -44,12 +44,21 @@ class ReportGenerator:
         # Data Rows
         header_info = [
             ("Application Number", oa_data.header.application_number),
+            ("Filing Date", oa_data.header.filing_date or "N/A"),
             ("Office Action Date", oa_data.header.office_action_date),
             ("Type", oa_data.header.office_action_type),
             ("Examiner", oa_data.header.examiner_name or "N/A"),
+            ("Examiner Type", oa_data.header.examiner_type or "N/A"),
+            ("Examiner Phone", oa_data.header.examiner_phone or "N/A"),
+            ("Examiner Email", oa_data.header.examiner_email or "N/A"),
             ("Art Unit", oa_data.header.art_unit or "N/A"),
             ("Response Deadline", oa_data.header.response_deadline or "Unknown"),
             ("Confirmation No.", oa_data.header.confirmation_number or "N/A"),
+            ("Attorney Docket No.", oa_data.header.attorney_docket_number or "N/A"),
+            ("Customer Number", oa_data.header.customer_number or "N/A"),
+            ("Title of Invention", oa_data.header.title_of_invention or "N/A"),
+            ("First Named Inventor", oa_data.header.first_named_inventor or "N/A"),
+            ("Applicant Name", oa_data.header.applicant_name or "N/A"),
         ]
         
         for key, value in header_info:
