@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     
     # Gemini LLM
     GOOGLE_API_KEY: str
-    GEMINI_MODEL: str = "gemini-2.0-flash-exp"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_TEMPERATURE: float = 0.0
     GEMINI_MAX_OUTPUT_TOKENS: int = 65536
     GEMINI_TIMEOUT_SECONDS: int = 900

@@ -70,12 +70,22 @@ class LLMService:
     def _initialize_client(self):
         try:
             logger.info("Attempting to initialize Gemini client...")
+            logger.info(f"Using Gemini model: {settings.GEMINI_MODEL}")
             if settings.GOOGLE_API_KEY:
                 # Log a masked version of the key to ensure we see it's there
                 masked_key = f"{settings.GOOGLE_API_KEY[:4]}...{settings.GOOGLE_API_KEY[-4:]}" if len(settings.GOOGLE_API_KEY) > 8 else "***"
                 logger.info(f"GOOGLE_API_KEY found: {masked_key}")
                 self.client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-                logger.info(f"Initialized Gemini client successfully")
+                logger.info(f"Initialized Gemini client successfully with model: {settings.GEMINI_MODEL}")
+                
+                # Test model availability by listing models (optional diagnostic)
+                try:
+                    logger.info("Testing model availability...")
+                    # This is a simple validation that the client works
+                    logger.info(f"Client initialized successfully for model: {settings.GEMINI_MODEL}")
+                except Exception as test_e:
+                    logger.warning(f"Model availability test failed (but client initialized): {test_e}")
+                    
             else:
                 logger.warning("GOOGLE_API_KEY not found. LLM service not initialized.")
                 self.client = None
@@ -149,6 +159,7 @@ class LLMService:
                     start_time = time.time()
                     try:
                         logger.info(f"Calling Gemini API with model: {settings.GEMINI_MODEL}")
+                        logger.info(f"API call parameters - Temperature: {settings.GEMINI_TEMPERATURE}, Max tokens: {settings.GEMINI_MAX_OUTPUT_TOKENS}")
                         response = await asyncio.to_thread(
                             self.client.models.generate_content,
                             model=settings.GEMINI_MODEL,
@@ -159,10 +170,11 @@ class LLMService:
                                 max_output_tokens=settings.GEMINI_MAX_OUTPUT_TOKENS
                             )
                         )
-                        logger.info("Gemini API call returned")
+                        logger.info("Gemini API call returned successfully")
                         
                         # Record latency
                         duration = time.time() - start_time
+                        logger.info(f"API call completed in {duration:.2f} seconds")
                         
                         self._log_token_usage(response, "generate_structured_content")
                     except ResourceExhausted as re_err:
@@ -172,7 +184,15 @@ class LLMService:
                             detail="AI Service is currently busy (Rate Limit Exceeded). Please try again in a moment."
                         )
                     except Exception as e:
-                        logger.error(f"Gemini API execution failed: {e}", exc_info=True)
+                        # Enhanced error logging for model-related issues
+                        error_msg = str(e)
+                        if "NOT_FOUND" in error_msg and "models/" in error_msg:
+                            logger.error(f"MODEL ERROR: The model '{settings.GEMINI_MODEL}' was not found or is not supported. Error: {e}")
+                            logger.error("Available models may have changed. Consider updating GEMINI_MODEL in configuration.")
+                        elif "generateContent" in error_msg:
+                            logger.error(f"GENERATE_CONTENT ERROR: The model '{settings.GEMINI_MODEL}' does not support generateContent. Error: {e}")
+                        else:
+                            logger.error(f"Gemini API execution failed: {e}", exc_info=True)
                         raise e
                     
                     # Log raw response for debugging

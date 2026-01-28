@@ -78,6 +78,7 @@ class JobService:
         from app.services.storage import storage_service
         from app.services.llm import llm_service
         from app.services.audit import audit_service
+        from app.core.config import settings
         
         logger.info(f"Starting extraction for Job {job_id} (Doc: {document_id})")
         db = await get_database()
@@ -130,7 +131,7 @@ class JobService:
                     "job_id": job_id,
                     "document_id": document_id,
                     "duration_ms": duration_ms,
-                    "model": "gemini-2.0-flash-exp" # Or fetch from settings
+                    "model": settings.GEMINI_MODEL
                 }
             )
 
