@@ -26,3 +26,6 @@ Thumbs.db
 filled_ads.pdf
 test_patent.pdf
 tests/test_patent.pdf
+test_api_output.pdf
+test_local_output.pdf
+test_output_ads_v3.pdf

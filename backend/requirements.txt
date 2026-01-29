@@ -9,6 +9,7 @@ bcrypt==3.2.0
 python-multipart>=0.0.9
 google-cloud-storage>=2.14.0
 google-genai>=0.3.0
+pikepdf>=8.0.0
 pypdf>=4.0.0
 pymupdf>=1.23.8
 python-magic-bin>=0.4.14 ; platform_system == "Windows"

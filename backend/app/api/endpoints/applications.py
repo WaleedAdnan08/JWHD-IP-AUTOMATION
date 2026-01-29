@@ -1,7 +1,10 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, status, Depends
+from fastapi.responses import StreamingResponse
 from app.models.patent_application import PatentApplicationMetadata, Inventor, PatentApplicationCreate, PatentApplicationResponse, PatentApplicationInDB
 from app.services.llm import llm_service
 from app.services.ads_generator import ADSGenerator
+from app.services.xfa_mapper import XFAMapper
+from app.services.pdf_injector import PDFInjector
 from app.services.csv_handler import parse_inventors_csv
 from app.services.storage import storage_service
 from app.models.user import UserResponse
@@ -194,36 +197,67 @@ async def create_application(
         )
 
 @router.post("/generate-ads")
-async def generate_ads(data: PatentApplicationMetadata) -> Dict[str, str]:
+async def generate_ads(data: PatentApplicationMetadata):
     """
-    Generate an ADS PDF from the provided metadata and return a download URL.
+    Generate an ADS PDF from the provided metadata and return it as a downloadable file.
+    Uses XFA Injection to fill the official USPTO form.
     """
-    generator = ADSGenerator()
-    output_filename = f"ads_{uuid.uuid4()}.pdf"
+    mapper = XFAMapper()
+    injector = PDFInjector()
     
-    try:
-        # Generate PDF locally
-        pdf_path = generator.generate_ads_pdf(data, output_filename)
+    # Path to the template
+    # We should ideally configure this path or locate it reliably
+    # Assuming the same template location structure as ADSGenerator
+    # Or strict path as per prompt: "d:/SnapDev/JWHD IP AUTOMATION/Client attachments/Original ADS from USPTO Website.pdf"
+    # But that path is outside the codebase/container usually.
+    # For now, I'll assume we should use the template inside the project or the one specified.
+    # The previous ADSGenerator used "backend/app/templates/pto_sb_14_template.pdf".
+    # The prompt for this task specified: "Original ADS from USPTO Website.pdf" at "../Client attachments/..."
+    # I should probably use the one in templates if I want it self-contained, or the specific one.
+    # I will stick to the one requested: "Original ADS from USPTO Website.pdf"
+    # BUT I need to resolve the path relative to backend.
+    
+    # Resolving path relative to this file? No, relative to CWD.
+    # CWD is "d:/SnapDev/JWHD IP AUTOMATION/CodeBase JWHD IP Automation"
+    # File is at "../Client attachments/Original ADS from USPTO Website.pdf"
+    # Use the XFA-enabled template we copied to the templates directory
+    template_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "templates",
+        "xfa_ads_template.pdf"
+    )
+    
+    # Fallback to external path if internal template not found
+    if not os.path.exists(template_path):
+        template_path = os.path.join("..", "Client attachments", "Original ADS from USPTO Website.pdf")
         
-        # Read the generated PDF
-        with open(pdf_path, "rb") as f:
-            pdf_content = f.read()
-            
-        # Upload to Storage
-        destination_blob_name = f"generated/{output_filename}"
-        storage_service.upload_file(
-            file_content=pdf_content,
-            destination_blob_name=destination_blob_name,
-            content_type="application/pdf"
+    if not os.path.exists(template_path):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="XFA template not found. Please ensure the XFA-enabled ADS template is available."
         )
+
+    try:
+        # 1. Map Data to XML
+        xml_data = mapper.map_metadata_to_xml(data)
         
-        # Generate download URL
-        download_url = storage_service.generate_presigned_url(destination_blob_name)
+        # 2. Inject XML into PDF
+        pdf_stream = injector.inject_xml(template_path, xml_data)
         
-        return {
-            "file_id": destination_blob_name,
-            "download_url": download_url
-        }
+        # 3. Return Streaming Response
+        filename = f"ADS_Filled_{data.application_number.replace('/', '-') if data.application_number else 'Draft'}.pdf"
+        
+        # We need to yield the data from the BytesIO
+        # BytesIO is not an async iterator, so we can wrap it or just pass it to StreamingResponse
+        # StreamingResponse accepts a file-like object.
+        
+        return StreamingResponse(
+            pdf_stream,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
         
     except Exception as e:
         logger.error(f"ADS generation failed: {e}")
@@ -231,7 +265,3 @@ async def generate_ads(data: PatentApplicationMetadata) -> Dict[str, str]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate ADS: {str(e)}"
         )
-    finally:
-        # Cleanup local generated file
-        if os.path.exists(output_filename):
-            os.remove(output_filename)

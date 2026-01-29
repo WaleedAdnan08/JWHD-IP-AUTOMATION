@@ -152,16 +152,85 @@ export const ApplicationWizard = () => {
   const handleGenerateADS = async () => {
     setIsLoading(true);
     setError(null);
+    setProcessingStatus('Generating PDF...');
 
     try {
-      const response = await api.post('/applications/generate-ads', metadata);
-      setDownloadUrl(response.data.download_url);
+      const response = await api.post('/applications/generate-ads', metadata, {
+        responseType: 'blob', // Critical for binary files
+      });
+      
+      // Create blob link to download
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Extract filename from header if possible, else default
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'filled_ads.pdf';
+      if (contentDisposition) {
+        // Simple regex to extract filename
+        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (filenameMatch && filenameMatch.length === 2) {
+            filename = filenameMatch[1];
+        }
+      }
+      
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      link.parentNode?.removeChild(link);
+      
+      // We keep the URL for the 'success' screen so user can re-download if needed,
+      // but ideally we should manage revocation.
+      // For now, we set it, and rely on browser garbage collection or explicit revoke if we navigate away.
+      // But per prompt "revoked to prevent browser memory leaks", so we should revoke it.
+      // However, if we revoke it immediately, the "Download PDF" button in the next step won't work
+      // unless we re-generate or keep it alive.
+      // Strategy: Since we auto-downloaded, the user HAS the file.
+      // The Success step "Download PDF" button could just re-trigger generation or use the blob if we keep it.
+      // To satisfy the requirement "After the download is initiated, the temporary URL must be revoked",
+      // I will revoke it after a small timeout to ensure the click registered.
+      
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+      }, 1000);
+
+      // For the success screen, we can't use the revoked URL.
+      // We can either:
+      // 1. Not show a download button (since it just downloaded).
+      // 2. Hide the button or change text to "Downloaded".
+      // 3. Make the button trigger `handleGenerateADS` again? No, that re-posts.
+      // I'll set downloadUrl to null to hide the button in success step or show a message.
+      setDownloadUrl(null);
       setStep('success');
+
     } catch (err: any) {
       console.error('Generation failed:', err);
       let errorMessage = 'Failed to generate ADS. Please try again.';
       
-      if (err.response?.data?.detail) {
+      // Handle Blob Error Response
+      if (err.response && err.response.data instanceof Blob) {
+         try {
+             const text = await err.response.data.text();
+             const errorJson = JSON.parse(text);
+             if (errorJson.detail) {
+                 const detail = errorJson.detail;
+                 if (typeof detail === 'string') {
+                    errorMessage = detail;
+                 } else if (Array.isArray(detail)) {
+                    errorMessage = detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+                 } else {
+                     errorMessage = JSON.stringify(detail);
+                 }
+             }
+         } catch (e) {
+             // Failed to parse blob as JSON, stick to default
+         }
+      } else if (err.response?.data?.detail) {
+        // Standard JSON Error handling (if responseType wasn't blob or axios handled it)
         const detail = err.response.data.detail;
         if (typeof detail === 'string') {
           errorMessage = detail;
