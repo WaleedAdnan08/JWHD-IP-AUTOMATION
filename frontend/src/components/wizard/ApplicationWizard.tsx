@@ -166,46 +166,36 @@ export const ApplicationWizard = () => {
       link.href = url;
       
       // Extract filename from header if possible, else default
-      const contentDisposition = response.headers['content-disposition'];
-      let filename = 'filled_ads.pdf';
-      if (contentDisposition) {
-        // Simple regex to extract filename
-        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
-        if (filenameMatch && filenameMatch.length === 2) {
-            filename = filenameMatch[1];
-        }
-      }
+      // 1. Generate Unique Filename to prevent conflicts
+      // This solves the "file already open in Acrobat" issue by ensuring every download has a unique path
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const appNum = metadata.application_number?.replace(/[\/\\]/g, '-') || 'Draft';
+      const filename = `ADS_${appNum}_${timestamp}.pdf`;
       
       link.setAttribute('download', filename);
       document.body.appendChild(link);
-      link.click();
       
-      // Cleanup
-      link.parentNode?.removeChild(link);
-      
-      // We keep the URL for the 'success' screen so user can re-download if needed,
-      // but ideally we should manage revocation.
-      // For now, we set it, and rely on browser garbage collection or explicit revoke if we navigate away.
-      // But per prompt "revoked to prevent browser memory leaks", so we should revoke it.
-      // However, if we revoke it immediately, the "Download PDF" button in the next step won't work
-      // unless we re-generate or keep it alive.
-      // Strategy: Since we auto-downloaded, the user HAS the file.
-      // The Success step "Download PDF" button could just re-trigger generation or use the blob if we keep it.
-      // To satisfy the requirement "After the download is initiated, the temporary URL must be revoked",
-      // I will revoke it after a small timeout to ensure the click registered.
-      
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-      }, 1000);
+      // 2. Update status to inform user
+      setProcessingStatus('Download starting...');
 
-      // For the success screen, we can't use the revoked URL.
-      // We can either:
-      // 1. Not show a download button (since it just downloaded).
-      // 2. Hide the button or change text to "Downloaded".
-      // 3. Make the button trigger `handleGenerateADS` again? No, that re-posts.
-      // I'll set downloadUrl to null to hide the button in success step or show a message.
-      setDownloadUrl(null);
-      setStep('success');
+      // 3. Trigger download with slight delay to ensure DOM is ready
+      setTimeout(() => {
+        link.click();
+        
+        // 4. Extended cleanup delay (increased from 1s to 10s)
+        // This gives Adobe Acrobat/Browser time to fully acquire the file handle
+        // before we revoke the blob URL, preventing "file not found" or "zombie resource" errors.
+        setTimeout(() => {
+            if (link.parentNode) {
+                link.parentNode.removeChild(link);
+            }
+            window.URL.revokeObjectURL(url);
+        }, 10000);
+
+        // Update UI state
+        setDownloadUrl(null); // URL is revoked, so we can't reuse it.
+        setStep('success');
+      }, 500);
 
     } catch (err: any) {
       console.error('Generation failed:', err);
