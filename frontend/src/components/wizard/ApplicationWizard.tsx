@@ -34,6 +34,10 @@ export const ApplicationWizard = () => {
   const [processingStatus, setProcessingStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   
+  const handleFileUploadError = (errorMessage: string) => {
+    setError(errorMessage);
+  };
+  
   // Data State
   const [metadata, setMetadata] = useState<ApplicationMetadata>({ inventors: [], applicant: {} });
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
@@ -78,79 +82,89 @@ export const ApplicationWizard = () => {
     throw new Error('Processing timed out');
   };
 
-  const handleFileUpload = async (file: File) => {
+  const handleFilesUpload = async (files: File[]) => {
     setIsLoading(true);
     setUploadProgress(0);
     setError(null);
-    setProcessingStatus('Uploading...');
+    setProcessingStatus('Processing files...');
     
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
-
+    const allResults: ApplicationMetadata[] = [];
+    
     try {
-      const config = {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent: any) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(percentCompleted);
-        },
-      };
-
-      if (isCsv) {
-        // CSV Workflow (Sync)
-        const response = await api.post('/applications/parse-csv', formData, config);
+      // Process each file sequentially
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileProgress = ((i / files.length) * 100);
+        setUploadProgress(fileProgress);
+        setProcessingStatus(`Processing file ${i + 1} of ${files.length}: ${file.name}`);
         
-        setMetadata({
-          inventors: response.data,
-          title: '',
-          application_number: ''
-        });
-      } else {
-        // PDF Workflow (Async)
-        // 1. Upload
-        formData.append('document_type', 'cover_sheet');
-        const uploadResponse = await api.post('/documents/upload', formData, config);
-        const documentId = uploadResponse.data.id || uploadResponse.data._id; // Handle both aliases just in case
+        const formData = new FormData();
+        formData.append('file', file);
+        const isCsv = file.name.toLowerCase().endsWith('.csv') || file.type === 'text/csv';
 
-        // 2. Start Parsing
-        setProcessingStatus('Initiating extraction...');
-        const parseResponse = await api.post(`/documents/${documentId}/parse`);
-        const jobId = parseResponse.data.job_id;
+        const config = {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (progressEvent: any) => {
+            const filePercent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            const totalProgress = fileProgress + (filePercent / files.length);
+            setUploadProgress(totalProgress);
+          },
+        };
 
-        // 3. Poll for Completion
-        await pollJobStatus(jobId);
+        let fileResult: ApplicationMetadata;
 
-        // 4. Fetch Results
-        setProcessingStatus('Finalizing...');
-        const docResponse = await api.get(`/documents/${documentId}`);
-        if (docResponse.data.extraction_data) {
-          setMetadata(docResponse.data.extraction_data);
+        if (isCsv) {
+          // CSV Workflow (Sync)
+          const response = await api.post('/applications/parse-csv', formData, config);
+          fileResult = {
+            inventors: response.data,
+            title: '',
+            application_number: '',
+            applicant: {}
+          };
         } else {
-          throw new Error('No extraction data found in document');
+          // PDF Workflow (Async)
+          formData.append('document_type', 'cover_sheet');
+          const uploadResponse = await api.post('/documents/upload', formData, config);
+          const documentId = uploadResponse.data.id || uploadResponse.data._id;
+
+          setProcessingStatus(`Extracting data from ${file.name}...`);
+          const parseResponse = await api.post(`/documents/${documentId}/parse`);
+          const jobId = parseResponse.data.job_id;
+
+          await pollJobStatus(jobId);
+
+          const docResponse = await api.get(`/documents/${documentId}`);
+          if (docResponse.data.extraction_data) {
+            fileResult = docResponse.data.extraction_data;
+          } else {
+            throw new Error(`No extraction data found in ${file.name}`);
+          }
         }
+
+        allResults.push(fileResult);
       }
 
+      // Merge all results
+      const mergedMetadata = mergeFileResults(allResults);
+      setMetadata(mergedMetadata);
+      setUploadProgress(100);
       setStep('review');
+
     } catch (err: any) {
       console.error('Processing failed:', err);
-      // Default error message
-      let errorMessage = `Failed to process ${isCsv ? 'CSV' : 'document'}. Please try again.`;
+      let errorMessage = 'Failed to process files. Please try again.';
       
-      // Use detailed error from backend if available
       if (err.response?.data?.detail) {
         const detail = err.response.data.detail;
         if (typeof detail === 'string') {
           errorMessage = detail;
         } else if (Array.isArray(detail)) {
-          // Handle FastAPI validation errors (array of objects)
           errorMessage = detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
         } else if (typeof detail === 'object') {
           errorMessage = JSON.stringify(detail);
         }
       } else if (err.message) {
-         // Fallback to axios error message if no response data
          errorMessage = err.message;
       }
       
@@ -158,6 +172,58 @@ export const ApplicationWizard = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const mergeFileResults = (results: ApplicationMetadata[]): ApplicationMetadata => {
+    const merged: ApplicationMetadata = {
+      inventors: [],
+      applicant: {},
+      total_drawing_sheets: 0
+    };
+
+    for (const result of results) {
+      // Use first non-empty title
+      if (!merged.title && result.title) {
+        merged.title = result.title;
+      }
+
+      // Use first non-empty application number
+      if (!merged.application_number && result.application_number) {
+        merged.application_number = result.application_number;
+      }
+
+      // Use first non-empty entity status
+      if (!merged.entity_status && result.entity_status) {
+        merged.entity_status = result.entity_status;
+      }
+
+      // Use first non-empty applicant
+      if (!merged.applicant?.name && result.applicant?.name) {
+        merged.applicant = result.applicant;
+      }
+
+      // Sum drawing sheets
+      if (result.total_drawing_sheets) {
+        merged.total_drawing_sheets = (merged.total_drawing_sheets || 0) + result.total_drawing_sheets;
+      }
+
+      // Merge inventors (deduplicate by full name)
+      if (result.inventors) {
+        for (const inventor of result.inventors) {
+          const fullName = `${inventor.first_name || ''} ${inventor.middle_name || ''} ${inventor.last_name || ''}`.trim();
+          const exists = merged.inventors.some(existing => {
+            const existingFullName = `${existing.first_name || ''} ${existing.middle_name || ''} ${existing.last_name || ''}`.trim();
+            return existingFullName === fullName;
+          });
+          
+          if (!exists) {
+            merged.inventors.push(inventor);
+          }
+        }
+      }
+    }
+
+    return merged;
   };
 
   const handleGenerateADS = async () => {
@@ -332,10 +398,12 @@ export const ApplicationWizard = () => {
             <p className="text-muted-foreground">Upload your Patent Cover Sheet (PDF) or Inventor List (CSV) to get started.</p>
           </div>
           <FileUpload
-            onFileSelect={handleFileUpload}
+            onFilesReady={handleFilesUpload}
             isLoading={isLoading}
             uploadProgress={uploadProgress}
             error={error}
+            isProcessing={isLoading}
+            onError={handleFileUploadError}
           />
           {isLoading && (
             <div className="w-full max-w-xl mx-auto space-y-2">
