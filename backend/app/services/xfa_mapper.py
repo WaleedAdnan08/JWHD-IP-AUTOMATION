@@ -113,21 +113,12 @@ class XFAMapper:
         if content_area_1 is not None:
             self._map_inventors(content_area_1, metadata.inventors)
 
-        # 2. ContentArea3 - Title & Docket
+        # 2. ContentArea3 - Title & Application Number
         content_area_3 = us_request.find('ContentArea3')
         if content_area_3 is not None:
             self._set_text(content_area_3, 'invention-title', metadata.title)
-            # Assuming application_number might be used as docket if docket not present, 
-            # or just map specific fields. The prompt says "application details".
-            # metadata doesn't strictly have "attorney_docket_number" in the model shown in previous steps,
-            # but usually it's passed or extracted. I'll map what I have.
-            # If application_number is in "12/345,678" format, it goes to application info usually, 
-            # but sometimes users put it here. Let's check schema for app number.
-            # Schema has `sfAppPos` -> `class` etc, but usually specific App Number field is different.
-            # Wait, `attorney-docket-number` is distinct.
-            pass
 
-        # 3. ContentArea2 - General Info
+        # 3. ContentArea2 - General Info, Drawing Sheets, Applicant
         content_area_2 = us_request.find('ContentArea2')
         if content_area_2 is not None:
             # Small Entity
@@ -135,6 +126,14 @@ class XFAMapper:
             if sf_app_pos is not None:
                 is_small = "1" if metadata.entity_status == "Small Entity" else "0"
                 self._set_text(sf_app_pos, 'chkSmallEntity', is_small)
+                
+                # Total Drawing Sheets
+                if metadata.total_drawing_sheets is not None:
+                    self._set_text(sf_app_pos, 'us-total_number_of_drawing-sheets', str(metadata.total_drawing_sheets))
+
+            # Map Applicant Information to Assignee section
+            if metadata.applicant:
+                self._map_applicant(content_area_2, metadata.applicant)
 
         # 4. Correspondence (Simplification: Map first inventor as correspondence if needed, or leave empty)
         # For now, we strictly map what is in metadata.
@@ -220,6 +219,10 @@ class XFAMapper:
             self._set_text(sf_name, 'firstName', inventor.first_name)
             self._set_text(sf_name, 'middleName', inventor.middle_name)
             self._set_text(sf_name, 'lastName', inventor.last_name)
+            
+            # Add suffix support
+            if inventor.suffix:
+                self._set_text(sf_name, 'suffix', inventor.suffix)
 
         # Address
         sf_mail = node.find('sfApplicantMail')
@@ -252,6 +255,30 @@ class XFAMapper:
         if node is not None:
             node.text = value if value else ""
     
+    def _map_applicant(self, content_area_2: ET.Element, applicant):
+        """
+        Maps applicant information to the assignee section.
+        """
+        sf_assignee = content_area_2.find('.//sfAssigneeInformation')
+        if sf_assignee is not None:
+            # Organization name
+            sf_org_choice = sf_assignee.find('sfAssigneorgChoice')
+            if sf_org_choice is not None:
+                # Set as organization
+                self._set_text(sf_org_choice, 'chkOrg', '1')
+                sf_org_name = sf_org_choice.find('sforgName')
+                if sf_org_name is not None:
+                    self._set_text(sf_org_name, 'orgName', applicant.name)
+
+            # Address
+            sf_assignee_addr = sf_assignee.find('sfAssigneeAddress')
+            if sf_assignee_addr is not None:
+                self._set_text(sf_assignee_addr, 'address-1', applicant.street_address)
+                self._set_text(sf_assignee_addr, 'city', applicant.city)
+                self._set_text(sf_assignee_addr, 'state', applicant.state)
+                self._set_text(sf_assignee_addr, 'postcode', applicant.zip_code)
+                self._set_text(sf_assignee_addr, 'txtCorrCtry', applicant.country)
+
     def _ensure_child(self, parent: ET.Element, tag: str):
         """
         Ensures a child tag exists.
