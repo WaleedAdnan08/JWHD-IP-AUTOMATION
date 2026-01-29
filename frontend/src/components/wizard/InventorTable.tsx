@@ -7,6 +7,7 @@ export interface Inventor {
   first_name: string;
   middle_name?: string;
   last_name: string;
+  suffix?: string;
   street_address?: string;
   city?: string;
   state?: string;
@@ -44,10 +45,9 @@ export const InventorTable: React.FC<InventorTableProps> = ({ inventors, setInve
           <table className="w-full caption-bottom text-sm">
             <thead className="[&_tr]:border-b">
               <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">First Name</th>
-                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Last Name</th>
-                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Address</th>
-                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Citizenship</th>
+                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[25%]">Name</th>
+                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[35%]">Address</th>
+                <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[15%]">Citizenship</th>
                 <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground w-[50px]"></th>
               </tr>
             </thead>
@@ -55,18 +55,36 @@ export const InventorTable: React.FC<InventorTableProps> = ({ inventors, setInve
               {inventors.map((inventor, index) => (
                 <tr key={index} className="border-b transition-colors hover:bg-muted/50">
                   <td className="p-4 align-middle">
-                    <Input 
-                      value={inventor.first_name || ''} 
-                      onChange={(e) => handleInputChange(index, 'first_name', e.target.value)}
-                      placeholder="First Name"
-                    />
-                  </td>
-                  <td className="p-4 align-middle">
-                    <Input 
-                      value={inventor.last_name || ''} 
-                      onChange={(e) => handleInputChange(index, 'last_name', e.target.value)}
-                      placeholder="Last Name"
-                    />
+                    <div className="space-y-2">
+                        <div className="flex gap-1">
+                            <Input
+                            value={inventor.first_name || ''}
+                            onChange={(e) => handleInputChange(index, 'first_name', e.target.value)}
+                            placeholder="First"
+                            className="flex-1"
+                            />
+                            <Input
+                            value={inventor.middle_name || ''}
+                            onChange={(e) => handleInputChange(index, 'middle_name', e.target.value)}
+                            placeholder="Middle"
+                            className="w-16"
+                            />
+                        </div>
+                        <div className="flex gap-1">
+                            <Input
+                            value={inventor.last_name || ''}
+                            onChange={(e) => handleInputChange(index, 'last_name', e.target.value)}
+                            placeholder="Last / Family"
+                            className="flex-1"
+                            />
+                             <Input
+                            value={inventor.suffix || ''}
+                            onChange={(e) => handleInputChange(index, 'suffix', e.target.value)}
+                            placeholder="Sfx"
+                            className="w-14"
+                            />
+                        </div>
+                    </div>
                   </td>
                   <td className="p-4 align-middle">
                     <div className="space-y-2">

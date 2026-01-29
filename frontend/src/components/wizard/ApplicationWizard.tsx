@@ -9,11 +9,22 @@ import { Input } from '@/components/ui/input';
 
 type WizardStep = 'upload' | 'review' | 'success';
 
+interface Applicant {
+    name?: string;
+    street_address?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    zip_code?: string;
+}
+
 interface ApplicationMetadata {
   title?: string;
   application_number?: string;
   entity_status?: string;
   inventors: Inventor[];
+  applicant?: Applicant;
+  total_drawing_sheets?: number;
 }
 
 export const ApplicationWizard = () => {
@@ -24,7 +35,7 @@ export const ApplicationWizard = () => {
   const [error, setError] = useState<string | null>(null);
   
   // Data State
-  const [metadata, setMetadata] = useState<ApplicationMetadata>({ inventors: [] });
+  const [metadata, setMetadata] = useState<ApplicationMetadata>({ inventors: [], applicant: {} });
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
 
   const pollJobStatus = async (jobId: string): Promise<void> => {
@@ -239,9 +250,52 @@ export const ApplicationWizard = () => {
 
   const resetWizard = () => {
     setStep('upload');
-    setMetadata({ inventors: [] });
+    setMetadata({ inventors: [], applicant: {} });
     setDownloadUrl(null);
     setError(null);
+  };
+
+  const loadMockData = () => {
+    setMetadata({
+        title: "System and Method for Automated Patent Processing",
+        application_number: "18/123,456",
+        entity_status: "Small Entity",
+        total_drawing_sheets: 12,
+        applicant: {
+            name: "SnapDev Innovations LLC",
+            street_address: "123 Tech Valley Dr, Suite 400",
+            city: "San Francisco",
+            state: "CA",
+            zip_code: "94105",
+            country: "US"
+        },
+        inventors: [
+            {
+                first_name: "Jane",
+                middle_name: "Marie",
+                last_name: "Doe",
+                suffix: "Ph.D.",
+                street_address: "456 Research Way",
+                city: "Palo Alto",
+                state: "CA",
+                zip_code: "94301",
+                country: "US",
+                citizenship: "US"
+            },
+            {
+                first_name: "John",
+                middle_name: "A.",
+                last_name: "Smith",
+                suffix: "Jr.",
+                street_address: "789 Coding Lane",
+                city: "Austin",
+                state: "TX",
+                zip_code: "78701",
+                country: "US",
+                citizenship: "US"
+            }
+        ]
+    });
   };
 
   return (
@@ -313,31 +367,96 @@ export const ApplicationWizard = () => {
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Application Title</label>
-                <Input 
-                  value={metadata.title || ''} 
+                <Input
+                  value={metadata.title || ''}
                   onChange={(e) => setMetadata({...metadata, title: e.target.value})}
                   placeholder="Enter Title"
                 />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Application Number</label>
-                <Input 
-                  value={metadata.application_number || ''} 
+                <Input
+                  value={metadata.application_number || ''}
                   onChange={(e) => setMetadata({...metadata, application_number: e.target.value})}
                   placeholder="e.g. 17/123,456"
                 />
               </div>
+               <div className="space-y-2">
+                <label className="text-sm font-medium">Total Drawing Sheets</label>
+                <Input
+                  type="number"
+                  value={metadata.total_drawing_sheets || ''}
+                  onChange={(e) => setMetadata({...metadata, total_drawing_sheets: parseInt(e.target.value) || 0})}
+                  placeholder="Number of sheets"
+                />
+              </div>
+            </div>
+
+            {/* Applicant Information Section */}
+            <div className="space-y-4 border rounded-md p-4 bg-muted/20">
+                <h3 className="font-medium text-base">Applicant / Company Information</h3>
+                <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2 md:col-span-2">
+                        <label className="text-sm font-medium">Name / Company</label>
+                        <Input
+                        value={metadata.applicant?.name || ''}
+                        onChange={(e) => setMetadata({...metadata, applicant: {...metadata.applicant, name: e.target.value}})}
+                        placeholder="Applicant Name or Company"
+                        />
+                    </div>
+                     <div className="space-y-2 md:col-span-2">
+                        <label className="text-sm font-medium">Street Address</label>
+                        <Input
+                        value={metadata.applicant?.street_address || ''}
+                        onChange={(e) => setMetadata({...metadata, applicant: {...metadata.applicant, street_address: e.target.value}})}
+                        placeholder="123 Business Rd"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">City</label>
+                        <Input
+                        value={metadata.applicant?.city || ''}
+                        onChange={(e) => setMetadata({...metadata, applicant: {...metadata.applicant, city: e.target.value}})}
+                        placeholder="City"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-sm font-medium">State / Province</label>
+                        <Input
+                        value={metadata.applicant?.state || ''}
+                        onChange={(e) => setMetadata({...metadata, applicant: {...metadata.applicant, state: e.target.value}})}
+                        placeholder="State"
+                        />
+                    </div>
+                     <div className="space-y-2">
+                        <label className="text-sm font-medium">Postal Code</label>
+                        <Input
+                        value={metadata.applicant?.zip_code || ''}
+                        onChange={(e) => setMetadata({...metadata, applicant: {...metadata.applicant, zip_code: e.target.value}})}
+                        placeholder="Zip / Postal Code"
+                        />
+                    </div>
+                     <div className="space-y-2">
+                        <label className="text-sm font-medium">Country</label>
+                        <Input
+                        value={metadata.applicant?.country || ''}
+                        onChange={(e) => setMetadata({...metadata, applicant: {...metadata.applicant, country: e.target.value}})}
+                        placeholder="Country Code (e.g. US)"
+                        />
+                    </div>
+                </div>
             </div>
 
             <div className="space-y-2">
               <label className="text-sm font-medium">Inventors ({metadata.inventors.length})</label>
-              <InventorTable 
-                inventors={metadata.inventors} 
-                setInventors={(invs) => setMetadata({...metadata, inventors: invs})} 
+              <InventorTable
+                inventors={metadata.inventors}
+                setInventors={(invs) => setMetadata({...metadata, inventors: invs})}
               />
             </div>
 
             <div className="flex justify-end gap-4 pt-4">
+              <Button variant="ghost" onClick={loadMockData} className="mr-auto text-muted-foreground">Load Mock Data</Button>
               <Button variant="outline" onClick={() => setStep('upload')}>Back</Button>
               <Button onClick={handleGenerateADS} disabled={isLoading}>
                 {isLoading ? (
