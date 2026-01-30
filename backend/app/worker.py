@@ -2,6 +2,11 @@ from app.core.celery_app import celery_app
 import json
 import logging
 
+# Export celery app for Celery CLI compatibility
+# This allows: python -m celery -A app.worker worker
+celery = celery_app
+app = celery_app  # Alternative export name
+
 # Configure a separate logger for the worker that writes to stdout
 # In a production environment, this might write to a file or an external service
 worker_logger = logging.getLogger("celery_worker")
